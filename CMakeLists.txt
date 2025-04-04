@@ -10,28 +10,47 @@ endif()
 #######################
 find_package(ament_cmake_auto REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 ament_auto_find_build_dependencies()
 
 ###########
 ## Build ##
 ###########
+rosidl_generate_interfaces(filter_test_interface
+  "msg/Simulation.msg"
+  "msg/Result.msg"
+
+  DEPENDENCIES
+    std_msgs
+    geometry_msgs
+    auto_aim_interfaces
+)
+
 ament_auto_add_executable(${PROJECT_NAME} src/filter_test.cpp src/filter.cpp)
-
 target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
-
 target_include_directories(${PROJECT_NAME} PUBLIC ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
 
+
+ament_auto_add_executable(armor_simulation src/armor_simulation.cpp)
+target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
+target_include_directories(${PROJECT_NAME} PUBLIC ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
+
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # uncomment the line when a copyright and license is not present in all source files
-  #set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # uncomment the line when this package is not in a git repo
-  #set(ament_cmake_cpplint_FOUND TRUE)
+  ament_auto_add_gtest(${PROJECT_NAME}_test 
+    test/filter_test.cpp 
+    src/filter.cpp
+  )
+  target_include_directories(${PROJECT_NAME}_test PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
   ament_lint_auto_find_test_dependencies()
+  # target_link_libraries(${PROJECT_NAME}_test ${PROJECT_NAME})
 endif()
 
 ament_auto_package(

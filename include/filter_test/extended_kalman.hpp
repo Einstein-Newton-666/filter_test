@@ -54,14 +54,14 @@ public:
     //只预测不更新协方差
     template<class PredictFunc>
     PredictResult predict(PredictFunc&& predict_func) const {
-        this->x_e.resize(predict_func.size); 
-        ceres::Jet<double, predict_func.size> x_e_jet[predict_func.size];
+        // this->x_e.resize(predict_func.size, 1); 
+        std::vector<ceres::Jet<double, Eigen::Dynamic>> x_e_jet(predict_func.size);
         for (int i = 0; i < predict_func.size; ++i) {
             x_e_jet[i].a = this->x_e[i];
             x_e_jet[i].v[i] = 1.;
             // a 对自己的偏导数为 1.
         }
-        ceres::Jet<double, predict_func.size> x_p_jet[predict_func.size];
+        std::vector<ceres::Jet<double, Eigen::Dynamic>> x_p_jet(predict_func.size);
         predict_func(x_e_jet, x_p_jet);
         Eigen::VectorXd x_p = Eigen::VectorXd::Zero(predict_func.size);
         for (int i = 0; i < predict_func.size; ++i) {
@@ -92,12 +92,12 @@ public:
 
     template<class MeasureFunc>
     MeasureResult measure(MeasureFunc&& measure_func) {
-        ceres::Jet<double, measure_func.input_size> x_e_jet[measure_func.input_size];
+        std::vector<ceres::Jet<double, Eigen::Dynamic>> x_e_jet(measure_func.input_size);
         for (int i = 0; i < measure_func.input_size; ++i) {
             x_e_jet[i].a = this->x_e[i];
             x_e_jet[i].v[i] = 1;
         }
-        ceres::Jet<double, measure_func.input_size> y_e_jet[measure_func.output_size];
+        std::vector<ceres::Jet<double, Eigen::Dynamic>> y_e_jet(measure_func.output_size);
         measure_func(x_e_jet, y_e_jet); // 转化成 Y 类型后的预测值，期间自动求导
         Eigen::VectorXd y_e = Eigen::VectorXd::Zero(measure_func.output_size);
         for (int i = 0; i < measure_func.output_size; ++i) {
@@ -114,12 +114,12 @@ public:
     void update_forward(MeasureFunc&& measure_func, const Eigen::VectorXd& y_mat, const Eigen::MatrixXd& r_mat) {
         MeasureResult mea_res = this->measure(measure_func);
         // K 中包含 Y 到 X 的一阶转移矩阵
-        this->x_e.resize(measure_func.inputsize);
-        this->p_mat.resize(measure_func.inputsize, measure_func.inputsize);
+        this->x_e.resize(measure_func.input_size);
+        this->p_mat.resize(measure_func.input_size, measure_func.input_size);
         Eigen::MatrixXd k_mat = this->p_mat * mea_res.h_mat.transpose()
             * (mea_res.h_mat * this->p_mat * mea_res.h_mat.transpose() + r_mat).inverse();
         this->x_e = this->x_e + k_mat * (y_mat - mea_res.y_e);
-        this->p_mat = (Eigen::MatrixXd::Identity(measure_func.inputsize, measure_func.inputsize) 
+        this->p_mat = (Eigen::MatrixXd::Identity(measure_func.input_size, measure_func.input_size) 
             - k_mat * mea_res.h_mat) * this->p_mat;
     }
 

@@ -1,15 +1,10 @@
-#include "filter_test/filter_test.hpp"
+#include <gtest/gtest.h>
+#include "filter_test/filter.hpp"
 
-ArmorTest::ArmorTest(/* args */){
-}
-
-void ArmorTest::armorsCallback(const auto_aim_interfaces::msg::Armors::SharedPtr armors_ptr){
-
-}
-
-int main(){
+TEST(filter, filter_test)
+{
     ArmorFilter af;
-    auto_aim_interfaces::msg::Armors::SharedPtr armors_msg = std::make_shared<auto_aim_interfaces::msg::Armors>();;
+    auto_aim_interfaces::msg::Armors::SharedPtr armors_msg;
     auto_aim_interfaces::msg::Armor armor;
     tf2::Quaternion q;
     q.setRPY(0, 0, 1.5708);  // 绕 Z 轴旋转 90 度（弧度）
@@ -26,4 +21,12 @@ int main(){
     af.init(armors_msg);
     armors_msg->header.stamp = rclcpp::Clock().now() + rclcpp::Duration::from_seconds(0.01);
     af.update(armors_msg);
+
+    // ASSERT_EQ(4, 2 + 2);
+}
+
+int main(int argc, char ** argv)
+{
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }
