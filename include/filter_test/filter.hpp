@@ -7,7 +7,7 @@ public:
     ArmorFilter(/* args */);
 
 private:
-    ExtendedKalman<10, 8>
+    ExtendedKalman ekf;
 };
 
 
