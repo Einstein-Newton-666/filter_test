@@ -53,15 +53,21 @@ public:
 
     //只预测不更新协方差
     template<class PredictFunc>
-    PredictResult predict(PredictFunc&& predict_func) const {
-        // this->x_e.resize(predict_func.size, 1); 
+    PredictResult predict(PredictFunc&& predict_func) {
+        this->x_e.resize(predict_func.size); 
         std::vector<ceres::Jet<double, Eigen::Dynamic>> x_e_jet(predict_func.size);
         for (int i = 0; i < predict_func.size; ++i) {
             x_e_jet[i].a = this->x_e[i];
+            x_e_jet[i].v.resize(predict_func.size);
+            x_e_jet[i].v.setZero();
             x_e_jet[i].v[i] = 1.;
             // a 对自己的偏导数为 1.
         }
         std::vector<ceres::Jet<double, Eigen::Dynamic>> x_p_jet(predict_func.size);
+        for (int i = 0; i < predict_func.size; ++i) {
+            x_p_jet[i].v.resize(predict_func.size);
+            x_p_jet[i].v.setZero();
+        }
         predict_func(x_e_jet, x_p_jet);
         Eigen::VectorXd x_p = Eigen::VectorXd::Zero(predict_func.size);
         for (int i = 0; i < predict_func.size; ++i) {
@@ -95,9 +101,15 @@ public:
         std::vector<ceres::Jet<double, Eigen::Dynamic>> x_e_jet(measure_func.input_size);
         for (int i = 0; i < measure_func.input_size; ++i) {
             x_e_jet[i].a = this->x_e[i];
+            x_e_jet[i].v.resize(measure_func.input_size);
+            x_e_jet[i].v.setZero();
             x_e_jet[i].v[i] = 1;
         }
         std::vector<ceres::Jet<double, Eigen::Dynamic>> y_e_jet(measure_func.output_size);
+        for (int i = 0; i < measure_func.output_size; ++i) {
+            y_e_jet[i].v.resize(measure_func.input_size);
+            y_e_jet[i].v.setZero();
+        }
         measure_func(x_e_jet, y_e_jet); // 转化成 Y 类型后的预测值，期间自动求导
         Eigen::VectorXd y_e = Eigen::VectorXd::Zero(measure_func.output_size);
         for (int i = 0; i < measure_func.output_size; ++i) {

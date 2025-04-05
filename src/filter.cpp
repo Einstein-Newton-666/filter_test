@@ -1,7 +1,7 @@
 #include "filter_test/filter.hpp"
 
 template<typename T>
-void ceres_xyz_to_ypd(const T xyz, T ypd) {
+void ceres_xyz_to_ypd(const T& xyz, T& ypd) {
     ypd[0] = ceres::atan2(xyz[1], xyz[0]); // yaw
     ypd[1] = ceres::atan2(xyz[2], ceres::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1])); // pitch
     ypd[2] = ceres::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]); // distance
@@ -21,7 +21,7 @@ struct Predict {
 public:
     explicit Predict(const double& delta_t): delta_t(delta_t) {}
     template<typename T>
-    void operator()(const T x_pre, T x_cur) const {
+    void operator()(const T& x_pre, T& x_cur) const {
         x_cur[0] = x_pre[0] + this->delta_t * x_pre[1];
         x_cur[1] = x_pre[1];
         x_cur[2] = x_pre[2] + this->delta_t * x_pre[3];
@@ -49,14 +49,14 @@ public:
     // 用装甲板进行更新J
     explicit MeasureSingle(const int i): I(i) {}
     template<typename T>
-    void operator()(const T x, T z) const {
+    void operator()(const T& x, T& z) const {
         // x[6] 是 super 板的 yaw
         const T xyz_armor = { 
             x[0] + ceres::cos(x[6] + M_PI_2 * I) * x[8 + I % 2],
             x[2] + ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
             x[4 + I % 2] 
         };
-        T ypd;
+        T ypd(3);
         ceres_xyz_to_ypd(xyz_armor, ypd);
         for (int i = 0; i < 3; i++) {
             z[i] = ypd[i];
@@ -84,7 +84,7 @@ public:
     // 用装甲板进行更新J
     explicit MeasureDouble(int i, int j): I(i), J(j) {}
     template<typename T>
-    void operator()(const T x, T z) const {
+    void operator()(const T& x, T& z) const {
         int idx = 0;
         for (const auto &i : {I, J})
         {
@@ -94,7 +94,7 @@ public:
                 x[2] + ceres::sin(x[6] + M_PI_2 * i) * x[8 + i % 2],
                 x[4 + i % 2] 
             };
-            T ypd;
+            T ypd(3);
             ceres_xyz_to_ypd(xyz_armor, ypd);
             for (int j = 0; j < 3; j++) {
                 z[idx + j] = ypd[j];
@@ -147,6 +147,8 @@ void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
 }
 
 Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
+    if(armors_msg->armors.empty()){return ekf.get_x();}
+
     Eigen::VectorXd x(10) ;
     x = ekf.get_x();
     //提高yaw的偏差获取滤波器中匹配的装甲板的索引 
@@ -193,10 +195,9 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
         Eigen::Vector3d xyz = z_xyz.segment(i * 4, i * 4 + 2);
         Eigen::Vector3d pyd;
         ceres_xyz_to_ypd(xyz, pyd);
-        z_pyd.segment(i * 4, i * 4 + 2) = pyd;
+        z_pyd.segment(i * 4, i * 4 + 2) << pyd;
         z_pyd[i + 3] = z_xyz[i + 3];
     }
-
     //根据匹配到的装甲板的数量选择不同的观测方程
     switch (index.size())
     {
@@ -209,6 +210,7 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
         ekf.update(MeasureSingle(index[0]), Predict(dt), z_pyd, get_q(dt), get_r(z_xyz));
         break;
     }
+    return ekf.get_x();
 }
 
 double ArmorFilter::orientationToYaw(const geometry_msgs::msg::Quaternion & q)
@@ -252,3 +254,25 @@ Eigen::MatrixXd ArmorFilter::get_r(Eigen::VectorXd & z){
     }
     return r.asDiagonal();
 };
+
+// int main(){
+//     ArmorFilter af;
+//     auto_aim_interfaces::msg::Armors::SharedPtr armors_msg = std::make_shared<auto_aim_interfaces::msg::Armors>();;
+//     auto_aim_interfaces::msg::Armor armor;
+//     tf2::Quaternion q;
+//     q.setRPY(0, 0, 1.5708);  // 绕 Z 轴旋转 90 度（弧度）
+//     armor.pose.orientation.x = q.x();
+//     armor.pose.orientation.y = q.y();
+//     armor.pose.orientation.z = q.z();
+//     armor.pose.orientation.w = q.w();
+//     armor.pose.position.x = 1.0;
+//     armor.pose.position.y = 2.0;
+//     armor.pose.position.z = 0.5;
+//     armors_msg->armors.push_back(armor);
+
+//     armors_msg->header.stamp = rclcpp::Clock().now();
+//     af.init(armors_msg);
+//     armors_msg->header.stamp = rclcpp::Clock().now() + rclcpp::Duration::from_seconds(0.01);
+//     auto state = af.update(armors_msg);
+//     std::cout << state <<std::endl; 
+// }
