@@ -5,24 +5,28 @@
 #include <rclcpp/publisher.hpp>
 
 #include "filter_test/filter.hpp"
-#include "auto_aim_interfaces/msg/target.hpp"
+#include <filter_test/msg/simulation.hpp>
+#include <filter_test/msg/result.hpp>
+#include <auto_aim_interfaces/msg/target.hpp>
 #include <auto_aim_interfaces/msg/armors.hpp>
 #include <auto_aim_interfaces/msg/armor.hpp>
 
-class ArmorTest
+
+class ArmorTest: public rclcpp::Node
 {
 
 public:
-    ArmorTest(/* args */);
+    ArmorTest(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
-    void armorsCallback(const auto_aim_interfaces::msg::Armors::SharedPtr armors_ptr);
+    void armorsCallback(const filter_test::msg::Simulation::SharedPtr simulation_ptr);
 
-    rclcpp::Subscription<auto_aim_interfaces::msg::Armors>::SharedPtr armors_sub_;
-    rclcpp::Subscription<auto_aim_interfaces::msg::Armors>::SharedPtr armors_pub_;
-    rclcpp::Publisher<auto_aim_interfaces::msg::Target>::SharedPtr target_pub_;
+    rclcpp::Subscription<filter_test::msg::Simulation>::SharedPtr armors_sub_;
+    rclcpp::Publisher<filter_test::msg::Result>::SharedPtr target_pub_;
 
     ArmorFilter armor_filter;
+    
+    bool init; 
 
 };
 

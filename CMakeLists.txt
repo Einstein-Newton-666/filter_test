@@ -10,14 +10,14 @@ endif()
 #######################
 find_package(ament_cmake_auto REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
+# find_package(rosidl_default_generators REQUIRED)
 
 ament_auto_find_build_dependencies()
 
 ###########
 ## Build ##
 ###########
-rosidl_generate_interfaces(filter_test_interface
+rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Simulation.msg"
   "msg/Result.msg"
 
@@ -27,16 +27,29 @@ rosidl_generate_interfaces(filter_test_interface
     auto_aim_interfaces
 )
 
-ament_auto_add_executable(${PROJECT_NAME} src/filter_test.cpp src/filter.cpp)
-target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
-target_include_directories(${PROJECT_NAME} PUBLIC ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
+ament_auto_add_executable(filter src/filter_test.cpp src/filter.cpp)
+target_include_directories(filter PUBLIC 
+${EIGEN3_INCLUDE_DIR} 
+${OpenCV_INCLUDE_DIRS} 
+${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+target_link_libraries(filter 
+${OpenCV_LIBS}
+${PROJECT_NAME}__rosidl_typesupport_cpp
+)
 
 
 ament_auto_add_executable(armor_simulation src/armor_simulation.cpp)
-target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
-target_include_directories(${PROJECT_NAME} PUBLIC ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
+target_include_directories(armor_simulation PUBLIC 
+${EIGEN3_INCLUDE_DIR} 
+${OpenCV_INCLUDE_DIRS} 
+${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+
+target_link_libraries(armor_simulation 
+${OpenCV_LIBS}
+${PROJECT_NAME}__rosidl_typesupport_cpp
+)
 
 
 if(BUILD_TESTING)

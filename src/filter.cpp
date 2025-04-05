@@ -56,7 +56,7 @@ public:
             x[2] + ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
             x[4 + I % 2] 
         };
-        T ypd(3);
+        T ypd(3);  //这里T的类型是自定义类型的容器
         ceres_xyz_to_ypd(xyz_armor, ypd);
         for (int i = 0; i < 3; i++) {
             z[i] = ypd[i];

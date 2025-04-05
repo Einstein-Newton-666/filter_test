@@ -3,21 +3,8 @@
 #include <ceres/jet.h>
 
 #include <Eigen/Dense>
-
-// template<int N_X, int N_Y>
+//修改自交哥的滤波器，主要改动为将滤波器的大小修改为动态大小，但速度可能会下降QWQ
 class ExtendedKalman {
-    //  private:
-    // using This = ExtendedKalman<N_X, N_Y>;
-
-public:
-    // using MatrixXX = Eigen::Matrix<double, N_X, N_X>;
-    // using MatrixYX = Eigen::Matrix<double, N_Y, N_X>;
-    // using MatrixXY = Eigen::Matrix<double, N_X, N_Y>;
-    // using MatrixYY = Eigen::Matrix<double, N_Y, N_Y>;
-    // using MatrixX1 = Eigen::Matrix<double, N_X, 1>;
-    // using MatrixY1 = Eigen::Matrix<double, N_Y, 1>;
-    // Eigen::MatrixXd;
-    // Eigen::VectorXd;
 
 private:
     Eigen::VectorXd x_e; // 估计状态变量
