@@ -196,13 +196,13 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
         Eigen::Vector3d pyd;
         ceres_xyz_to_ypd(xyz, pyd);
         z_pyd.segment(i * 4, i * 4 + 2) << pyd;
-        z_pyd[i + 3] = z_xyz[i + 3];
+        z_pyd[i * 4 + 3] = z_xyz[i * 4 + 3];
     }
+
     //根据匹配到的装甲板的数量选择不同的观测方程
     switch (index.size())
     {
     case 2:
-
         ekf.update(MeasureDouble(index[0], index[1]), Predict(dt), z_pyd, get_q(dt), get_r(z_xyz));
         break;
     
@@ -210,7 +210,10 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
         ekf.update(MeasureSingle(index[0]), Predict(dt), z_pyd, get_q(dt), get_r(z_xyz));
         break;
     }
-    return ekf.get_x();
+
+    x = ekf.get_x();
+    x[6] = angles::normalize_angle(x[6]);
+    return x;
 }
 
 double ArmorFilter::orientationToYaw(const geometry_msgs::msg::Quaternion & q)
@@ -249,8 +252,8 @@ Eigen::MatrixXd ArmorFilter::get_q(double dt_){
 
 Eigen::MatrixXd ArmorFilter::get_r(Eigen::VectorXd & z){
     Eigen::VectorXd r(z.size());
-    for(int i = 0; i < z.size() % 4; i++){
-        r.segment(i, i + 3) << r_pose, r_pose, abs(r_distance * z[3 + i * 4]), r_yaw;
+    for(int i = 0; i < (z.size() / 4); i++){
+        r.segment(i *4 , i * 4 + 3) << r_pose, r_pose, abs(r_distance * z[3 + i * 4]), r_yaw;
     }
     return r.asDiagonal();
 };

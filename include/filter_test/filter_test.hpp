@@ -21,8 +21,8 @@ public:
 private:
     void armorsCallback(const filter_test::msg::Simulation::SharedPtr simulation_ptr);
 
-    rclcpp::Subscription<filter_test::msg::Simulation>::SharedPtr armors_sub_;
-    rclcpp::Publisher<filter_test::msg::Result>::SharedPtr target_pub_;
+    rclcpp::Subscription<filter_test::msg::Simulation>::SharedPtr simulation_sub_;
+    rclcpp::Publisher<filter_test::msg::Result>::SharedPtr result_pub_;
 
     ArmorFilter armor_filter;
     
