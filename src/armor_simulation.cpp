@@ -5,7 +5,7 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     // 参数声明
     publish_rate = 100;
     linear_limit = 20, angle_limit = M_PI * 4;
-    linear_speed_limit = 2, angle_speed_limit = M_PI;
+    linear_speed_limit = 3, angle_speed_limit = M_PI;
     linear_acc = 0.5, angle_acc = M_PI_4;
     
     //设置初值

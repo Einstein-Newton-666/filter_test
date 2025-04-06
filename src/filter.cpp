@@ -10,7 +10,7 @@ void ceres_xyz_to_ypd(const T& xyz, T& ypd) {
 // EKF
 // xa = x_armor, xc = x_robot_center
 // state: xc, v_xc, yc, v_yc, za1, za2, orient, v_yaw, r1, r2
-// index: 0,  1,    2,  3,    4,  5,    6,      7,     8,   9,
+// index: 0,  1,    2,  3,    4,   5,   6,      7,     8,   9,
 // - yaw 需要在切换时 set?
 // - 对于只有单独半径的装甲板， 不更新多余的 r 和 z
 // measurement: xa, ya, za, yaw
@@ -56,11 +56,14 @@ public:
             x[2] + ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
             x[4 + I % 2] 
         };
-        T ypd(3);  //这里T的类型是自定义类型的容器
-        ceres_xyz_to_ypd(xyz_armor, ypd);
-        for (int i = 0; i < 3; i++) {
-            z[i] = ypd[i];
-        }
+        // T ypd(3);  //这里T的类型是自定义类型的容器
+        // ceres_xyz_to_ypd(xyz_armor, ypd);
+        // for (int i = 0; i < 3; i++) {
+        //     z[i] = ypd[i];
+        // }
+        z[0] = ceres::atan2(xyz_armor[1], xyz_armor[0]); // yaw
+        z[1] = ceres::atan2(xyz_armor[2], ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1])); // pitch
+        z[2] = ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1] + xyz_armor[2] * xyz_armor[2]); // distance
         // orien_yaw = orien_yaw
         z[3] = x[6] + M_PI_2 * I;
     }
@@ -94,11 +97,14 @@ public:
                 x[2] + ceres::sin(x[6] + M_PI_2 * i) * x[8 + i % 2],
                 x[4 + i % 2] 
             };
-            T ypd(3);
-            ceres_xyz_to_ypd(xyz_armor, ypd);
-            for (int j = 0; j < 3; j++) {
-                z[idx + j] = ypd[j];
-            }
+            // T ypd(3);
+            // ceres_xyz_to_ypd(xyz_armor, ypd);
+            // for (int j = 0; j < 3; j++) {
+            //     z[idx + j] = ypd[j];
+            // }
+            z[idx + 0] = ceres::atan2(xyz_armor[1], xyz_armor[0]); // yaw
+            z[idx + 1] = ceres::atan2(xyz_armor[2], ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1])); // pitch
+            z[idx + 2] = ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1] + xyz_armor[2] * xyz_armor[2]); // distance
             // orien_yaw = orien_yaw
             z[idx + 3] = x[6] + M_PI_2 * i;
             idx += 4;
@@ -118,8 +124,8 @@ private:
 ArmorFilter::ArmorFilter(){
     //参数瞎抄的
     init_r = 0.25;
-    s2qxy_ = 3, s2qz_ = 0.0001, s2qyaw_ = 15, s2qr_ = 0.0005;
-    r_pose = 0.002, r_distance = 0.1, r_yaw = 0.5;
+    s2qxy_ = 0.05, s2qz_ = 0.001, s2qyaw_ = 15, s2qr_ = 0.8;
+    r_pose = 0.002, r_distance = 0.01, r_yaw = 0.005;
 
 }
 
@@ -171,7 +177,7 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
     }
 
     //通过第一块装甲板获取yaw的修正值(通过第二块得到的值也应该一样，但是我没试过。。。)
-    double yaw_offset = angles::normalize_angle(x[6] + index[0] * M_PI_2) - x[6] + index[0] * M_PI_2;
+    double yaw_offset = angles::normalize_angle(x[6] + index[0] * M_PI_2) - x[6] - index[0] * M_PI_2;
     //修正滤波器中的yaw值使滤波器能正常更新
     Eigen::VectorXd fix_x(10);
     fix_x = ekf.get_x();
@@ -253,7 +259,7 @@ Eigen::MatrixXd ArmorFilter::get_q(double dt_){
 Eigen::MatrixXd ArmorFilter::get_r(Eigen::VectorXd & z){
     Eigen::VectorXd r(z.size());
     for(int i = 0; i < (z.size() / 4); i++){
-        r.segment(i *4 , i * 4 + 3) << r_pose, r_pose, abs(r_distance * z[3 + i * 4]), r_yaw;
+        r.segment(i *4 , i * 4 + 3) << r_pose, r_pose, abs(r_distance * z[2 + i * 4]), r_yaw;
     }
     return r.asDiagonal();
 };

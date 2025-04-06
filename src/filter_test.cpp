@@ -33,16 +33,16 @@ void ArmorTest::armorsCallback(const filter_test::msg::Simulation::SharedPtr sim
         result.radius_1 = status[8];
         result.radius_2 = status[9];
         //计算观测偏差
-        result.position_x_diff = simulation_ptr->position.x - status[0];
-        result.position_y_diff = simulation_ptr->position.y - status[2];
-        result.position_z1_diff = simulation_ptr->position.z - status[4];
-        result.position_z2_diff = simulation_ptr->dz - result.dz;
-        result.position_yaw_diff = simulation_ptr->yaw - status[6];
-        result.r1_diff = simulation_ptr->radius_1 - status[8];
-        result.r2_diff = simulation_ptr->radius_2 - status[9];
-        result.velocity_x_diff = simulation_ptr->velocity.x - status[1];
-        result.velocity_y_diff = simulation_ptr->velocity.y - status[3];
-        result.velocity_yaw_diff = simulation_ptr->v_yaw - status[7];
+        result.position_x_diff = (simulation_ptr->position.x - status[0])/simulation_ptr->position.x;
+        result.position_y_diff = (simulation_ptr->position.y - status[2])/simulation_ptr->position.y;
+        result.position_z1_diff = (simulation_ptr->position.z - status[4])/simulation_ptr->position.z;
+        result.position_z2_diff = (simulation_ptr->dz - result.dz)/(simulation_ptr->position.z + simulation_ptr->dz);
+        result.position_yaw_diff = (simulation_ptr->yaw - status[6])/simulation_ptr->yaw;
+        result.r1_diff = (simulation_ptr->radius_1 - status[8])/simulation_ptr->radius_1;
+        result.r2_diff = (simulation_ptr->radius_2 - status[9])/simulation_ptr->radius_2;
+        result.velocity_x_diff = (simulation_ptr->velocity.x - status[1]) / simulation_ptr->velocity.x;
+        result.velocity_y_diff = (simulation_ptr->velocity.y - status[3]) / simulation_ptr->velocity.y;
+        result.velocity_yaw_diff = (simulation_ptr->v_yaw - status[7]) / simulation_ptr->v_yaw;
         result_pub_->publish(result);
     }
 }
