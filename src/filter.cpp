@@ -124,9 +124,12 @@ private:
 ArmorFilter::ArmorFilter(){
     //参数瞎抄的
     init_r = 0.25;
-    s2qxy_ = 0.05, s2qz_ = 0.001, s2qyaw_ = 15, s2qr_ = 0.8;
-    r_pose = 0.002, r_distance = 0.01, r_yaw = 0.005;
+    s2qxy_ = 3, s2qz_ = 0.01, s2qyaw_ = 15, s2qr_ = 0.5;
+    r_pose = 0.02, r_distance = 0.1, r_yaw = 0.6;
 
+    last_armor_number = 0;
+
+    last_yaw = 0;
 }
 
 void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
@@ -150,51 +153,130 @@ void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
     ekf.init_x(x);
 
     last_time_ = armors_msg->header.stamp;
+    last_yaw = yaw;
+    last_armor_number = armors_msg->armors.size();
 }
 
 Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
     if(armors_msg->armors.empty()){return ekf.get_x();}
-
-    Eigen::VectorXd x(10) ;
-    x = ekf.get_x();
-    //提高yaw的偏差获取滤波器中匹配的装甲板的索引 
-    //TODO:更高效的匹配和筛选方法，可以参考西工大代码https://github.com/SnocrashWang/WMJAimer/tree/master
-    std::vector<int> index(armors_msg->armors.size());
-    for (int i = 0; i < armors_msg->armors.size(); i++){
-        double min_yaw_diff = 1e9;
-        for (int j = 0; j < 4; j++)
-        {
-            double yaw_diff = abs(
-                angles::shortest_angular_distance(
-                    orientationToYaw(armors_msg->armors[i].pose.orientation), x[6] + j * M_PI_2
-                )
-            );
-            if(yaw_diff < min_yaw_diff){
-                min_yaw_diff = yaw_diff;
-                index[i] = j;
-            }
-        }
-    }
-
-    //通过第一块装甲板获取yaw的修正值(通过第二块得到的值也应该一样，但是我没试过。。。)
-    double yaw_offset = angles::normalize_angle(x[6] + index[0] * M_PI_2) - x[6] - index[0] * M_PI_2;
-    //修正滤波器中的yaw值使滤波器能正常更新
-    Eigen::VectorXd fix_x(10);
-    fix_x = ekf.get_x();
-    fix_x[6] += yaw_offset;
-    ekf.set_x(fix_x);
+    int armor_number = armors_msg->armors.size();
+    // if(armor_number == 2 && last_armor_number == 1) {last_yaw += M_PI_2; std::cout<<" s "<<std::endl;}
+    last_armor_number = armor_number;
 
     rclcpp::Time time_now = armors_msg->header.stamp;
     double dt = (time_now - last_time_).seconds();
     last_time_ = time_now;
 
+    Eigen::VectorXd x(10) ;
+    x = ekf.predict(Predict(dt)).x_p;
+    //获取滤波器中匹配的装甲板的索引 
+    //TODO:更高效的匹配和筛选方法，可以参考西工大代码https://github.com/SnocrashWang/WMJAimer/tree/master
+    // std::vector<int> index(armors_msg->armors.size());
+    // std::vector<double> offset(armors_msg->armors.size());
+    // for (int i = 0; i < armors_msg->armors.size(); i++){
+    //     double min_match_diff = 1e9;
+    //     for (int j = 0; j < 4; j++){
+    //         double yaw_1 = orientationToYaw(armors_msg->armors[i].pose.orientation);
+    //         double yaw_2 = x[6] + M_PI_2 * j;
+    //         // if(angles::normalize_angle(yaw_2) > M_PI_2 && angles::normalize_angle(yaw_2) < -M_PI_2) continue; //删除后两块装甲板
+    //         // double x_1 = x[0] + cos(x[6] + M_PI_2 * j) * x[8 + j % 2];
+    //         // double x_2 = armors_msg->armors[i].pose.position.x;
+    //         // double y_1 = x[2] + sin(x[6] + M_PI_2 * j) * x[8 + j % 2];
+    //         // double y_2 = armors_msg->armors[i].pose.position.y;
+    //         double match_diff = abs(angles::shortest_angular_distance(yaw_1, yaw_2));
+    //         // std::cout << match_diff << " ";
+    //         if(match_diff < min_match_diff){
+    //             // if(!index.empty()){
+    //             //     if(j == index[0]) continue; //防止匹配到同一块装甲板上
+    //             // }
+    //             min_match_diff = match_diff;
+    //             index[i] = j;
+    //             double yaw_offset = floor((yaw_2 - yaw_1 + M_PI_2)/ M_PI /2.) * M_PI * 2;
+    //             offset.push_back(yaw_offset);
+    //         }
+    //     }
+    //     if(last_armor == 1 && armor == 2){std::cout << min_match_diff <<"    ";}
+    //     // std::cout << min_match_diff  <<std::endl;
+    //     // std::cout << index[i]  <<std::endl;
+    //     // if(min_match_diff > M_PI_4){
+    //         // double yaw_1 = orientationToYaw(armors_msg->armors[i].pose.orientation);
+    //         // std::cout << min_match_diff << std::endl << yaw_1 <<std::endl;
+    //         // for (int j = 0; j < 4; j++){
+    //             // double yaw_2 = x[6] + M_PI_2 * index[i];
+    //             // double yaw_2 = x[6] + M_PI_2 * j;
+    //             // std::cout<<yaw_2<< "   "<< abs(angles::shortest_angular_distance(yaw_1, yaw_2)) <<std::endl;
+    //         // }
+    //     // }
+    // }
+
+    auto calculate_yaw_diff = [&](int idx, double observed_yaw) {
+        const double predicted_yaw = x[6] + idx * M_PI_2;
+        return std::abs(angles::shortest_angular_distance(observed_yaw, predicted_yaw));
+      };
+    
+      std::vector<int> index;
+      // 单装甲板匹配
+      if (armors_msg->armors.size() == 1) {
+        const double obs_yaw = orientationToYaw(armors_msg->armors[0].pose.orientation);
+        
+        // 直接寻找最小角度差索引
+        int best_idx = 0;
+        double min_diff = calculate_yaw_diff(0, obs_yaw);
+        for (int i = 1; i < 4; ++i) {
+          const double diff = calculate_yaw_diff(i, obs_yaw);
+          if (diff < min_diff) {
+            min_diff = diff;
+            best_idx = i;
+          }
+        }
+        index.push_back(best_idx);
+      }
+      // 双装甲板匹配
+      else if (armors_msg->armors.size() == 2) {
+        // 仅允许相邻装甲板对
+        constexpr std::array<std::pair<int, int>, 4> adjacent_pairs = {
+          {{0,1}, {1,2}, {2,3}, {3,0}}
+        };
+    
+        // 获取观测角度（已处理连续性）
+        const double yaw1 = orientationToYaw(armors_msg->armors[0].pose.orientation);
+        const double yaw2 = orientationToYaw(armors_msg->armors[1].pose.orientation);
+    
+        // 寻找最佳相邻对
+        auto best_pair = adjacent_pairs[0];
+        double min_total_diff = std::numeric_limits<double>::max();
+        
+        for (const auto& pair : adjacent_pairs) {
+          // 考虑两种顺序匹配可能性
+          const double diff1 = calculate_yaw_diff(pair.first, yaw1) + 
+                              calculate_yaw_diff(pair.second, yaw2);
+          const double diff2 = calculate_yaw_diff(pair.second, yaw1) + 
+                              calculate_yaw_diff(pair.first, yaw2);
+          const double total_diff = std::min(diff1, diff2);
+          
+          if (total_diff < min_total_diff) {
+            min_total_diff = total_diff;
+            best_pair = diff1 < diff2 ? std::make_pair(pair.first, pair.second) : std::make_pair(pair.second, pair.first);
+          }
+        }
+        
+        index = {best_pair.first, best_pair.second};
+      }
+
+    //   for (auto &&i : index)
+    //   {
+    //     std::cout << i <<"  ";
+    //   }
+    //   std::cout << std::endl;
+
     Eigen::VectorXd z_xyz(index.size() * 4);
     for(int i = 0; i < index.size(); i++){
-        z_xyz.segment(i * 4, i * 4 + 3) << 
-            armors_msg->armors[i].pose.position.x, 
-            armors_msg->armors[i].pose.position.y,
-            armors_msg->armors[i].pose.position.z, 
-            orientationToYaw(armors_msg->armors[i].pose.orientation);
+        z_xyz[i * 4] = armors_msg->armors[i].pose.position.x;
+        z_xyz[i * 4 + 1] = armors_msg->armors[i].pose.position.y;
+        z_xyz[i * 4 + 2] = armors_msg->armors[i].pose.position.z;
+        // z_xyz[i * 4 + 3] = orientationToYaw(armors_msg->armors[i].pose.orientation) + offset[i];
+        z_xyz[i * 4 + 3] = orientationToYaw(armors_msg->armors[i].pose.orientation);
+
     }
     Eigen::VectorXd z_pyd(index.size() * 4);
     for(int i = 0; i < index.size(); i++){
@@ -209,29 +291,33 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
     switch (index.size())
     {
     case 2:
-        ekf.update(MeasureDouble(index[0], index[1]), Predict(dt), z_pyd, get_q(dt), get_r(z_xyz));
+        ekf.update(MeasureDouble(index[0], index[1]), Predict(dt), z_pyd, get_q(dt), get_r(z_pyd));
         break;
     
     default:
-        ekf.update(MeasureSingle(index[0]), Predict(dt), z_pyd, get_q(dt), get_r(z_xyz));
+        ekf.update(MeasureSingle(index[0]), Predict(dt), z_pyd, get_q(dt), get_r(z_pyd));
         break;
     }
 
     x = ekf.get_x();
-    x[6] = angles::normalize_angle(x[6]);
+    // x[6] = angles::normalize_angle(x[6]);
+    // ekf.set_x(x);
+    last_yaw = x[6];
+    // if(abs(x[7]) > M_PI) x[7] = x[7] / abs(x[7]) * M_PI;
     return x;
 }
 
 double ArmorFilter::orientationToYaw(const geometry_msgs::msg::Quaternion & q)
 {
-  // Get armor yaw
-  tf2::Quaternion tf_q;
-  tf2::fromMsg(q, tf_q);
-  double roll, pitch, yaw;
-  tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
-  // Make yaw change continuous (-pi~pi to -inf~inf)
-  yaw = angles::normalize_angle(yaw);
-  return yaw;
+    // Get armor yaw
+    tf2::Quaternion tf_q;
+    tf2::fromMsg(q, tf_q);
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
+    // Make yaw change continuous (-pi~pi to -inf~inf)
+    //yaw = angles::normalize_angle(yaw);
+    yaw = last_yaw + angles::shortest_angular_distance(last_yaw, yaw);
+    return yaw;
 }
 
 Eigen::MatrixXd ArmorFilter::get_q(double dt_){
@@ -259,7 +345,7 @@ Eigen::MatrixXd ArmorFilter::get_q(double dt_){
 Eigen::MatrixXd ArmorFilter::get_r(Eigen::VectorXd & z){
     Eigen::VectorXd r(z.size());
     for(int i = 0; i < (z.size() / 4); i++){
-        r.segment(i *4 , i * 4 + 3) << r_pose, r_pose, abs(r_distance * z[2 + i * 4]), r_yaw;
+        r.segment(i *4 , i * 4 + 3) << r_pose, r_pose, abs(r_distance * z[i * 4 + 2]), r_yaw;
     }
     return r.asDiagonal();
 };

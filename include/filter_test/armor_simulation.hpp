@@ -13,6 +13,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <filter_test/msg/simulation.hpp>
 
@@ -47,5 +48,9 @@ private:
   double linear_acc, angle_acc;
   double linear_limit, angle_limit;
   double linear_speed_limit, angle_speed_limit;
+
+  visualization_msgs::msg::Marker armor_marker_;
+  visualization_msgs::msg::MarkerArray marker_array_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
 
 };

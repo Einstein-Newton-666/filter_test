@@ -4,6 +4,8 @@
 #include <rclcpp/subscription.hpp>
 #include <rclcpp/publisher.hpp>
 
+#include <visualization_msgs/msg/marker_array.hpp>
+
 #include "filter_test/filter.hpp"
 #include <filter_test/msg/simulation.hpp>
 #include <filter_test/msg/result.hpp>
@@ -28,6 +30,11 @@ private:
     
     bool init; 
 
+    visualization_msgs::msg::Marker position_marker_;
+    visualization_msgs::msg::Marker linear_v_marker_;
+    visualization_msgs::msg::Marker angular_v_marker_;
+    visualization_msgs::msg::Marker armor_marker_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
 };
 
 

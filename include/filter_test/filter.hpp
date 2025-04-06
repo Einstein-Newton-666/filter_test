@@ -33,12 +33,14 @@ private:
     ExtendedKalman ekf;
 
     double init_r;
+    int last_armor_number;
 
     rclcpp::Time last_time_;
 
     double s2qxy_, s2qz_, s2qyaw_, s2qr_;
     double r_pose, r_distance, r_yaw;
 
+    double last_yaw;
 };
 
 
