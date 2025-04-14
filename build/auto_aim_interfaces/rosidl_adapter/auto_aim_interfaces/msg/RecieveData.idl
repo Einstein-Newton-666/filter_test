@@ -1,0 +1,51 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from auto_aim_interfaces/msg/RecieveData.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Header.idl"
+
+module auto_aim_interfaces {
+  module msg {
+    struct RecieveData {
+      std_msgs::msg::Header header;
+
+      float pitch;
+
+      float yaw;
+
+      float shoot_speed;
+
+      int32 current_color;
+
+      @verbatim (language="comment", text=
+        "哨兵专有 ######")
+      float big_yaw;
+
+      int32 enemies_blood_0;
+
+      int32 enemies_blood_1;
+
+      int32 enemies_blood_2;
+
+      int32 enemies_blood_3;
+
+      int32 enemies_blood_4;
+
+      int32 enemies_blood_5;
+
+      int32 enemies_outpost;
+
+      int32 another_priority;
+
+      int32 game_progress;
+
+      int32 game_type;
+
+      int32 if_attack_engineer;
+
+      @verbatim (language="comment", text=
+        "用于区分自瞄还是大符模式")
+      int32 mode;
+    };
+  };
+};

@@ -1,0 +1,88 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-d6e59698fb1adae5d51f.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.12"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3
+					]
+				}
+			],
+			"name" : "",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "armor_tracker",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "armor_tracker::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-armor_tracker-655443e7248909bec83d.json",
+					"name" : "armor_tracker",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "armor_tracker_node::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-armor_tracker_node-356a5d8d309634045ac2.json",
+					"name" : "armor_tracker_node",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "armor_tracker_uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-armor_tracker_uninstall-357842a7041cb02e6ffc.json",
+					"name" : "armor_tracker_uninstall",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uninstall-8fff344813ad15708f62.json",
+					"name" : "uninstall",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/chakfan/double_model/build/armor_tracker",
+		"source" : "/home/chakfan/double_model/src/armor_tracker"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}

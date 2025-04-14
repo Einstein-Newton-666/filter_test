@@ -1,0 +1,23 @@
+{
+  "package_name": "auto_aim_interfaces",
+  "non_idl_tuples": [
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/Armor.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/Armors.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/Anglesolver.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/TargetPose.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/Vehicle.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/Vehicles.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/CameraMsg.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/DebugLight.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/DebugLights.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/DebugArmor.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/DebugArmors.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/RecieveData.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/SendData.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/ArmorInfo.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/EnemyInfo.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/TrackerInfo.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/TrackerPredict.msg",
+    "/home/chakfan/double_model/src/auto_aim_interfaces:msg/TrackerTarget.msg"
+  ]
+}

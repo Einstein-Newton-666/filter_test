@@ -1,0 +1,28 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from auto_aim_interfaces/msg/EnemyInfo.msg
+// generated code does not contain a copyright notice
+
+#include "geometry_msgs/msg/Point.idl"
+#include "geometry_msgs/msg/Vector3.idl"
+
+module auto_aim_interfaces {
+  module msg {
+    struct EnemyInfo {
+      geometry_msgs::msg::Point position;
+
+      geometry_msgs::msg::Vector3 velocity;
+
+      double orientation_yaw;
+
+      double v_yaw;
+
+      double radius_1;
+
+      double radius_2;
+
+      double dz;
+
+      boolean tracking;
+    };
+  };
+};

@@ -1,0 +1,57 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from auto_aim_interfaces/msg/CameraMsg.msg
+// generated code does not contain a copyright notice
+
+#include "geometry_msgs/msg/PoseStamped.idl"
+
+module auto_aim_interfaces {
+  module msg {
+    typedef int32 int32__5[5];
+    typedef geometry_msgs::msg::PoseStamped geometry_msgs__msg__PoseStamped;
+    typedef geometry_msgs__msg__PoseStamped geometry_msgs__msg__PoseStamped__5[5];
+    typedef float float__5[5];
+    @verbatim (language="comment", text=
+      "主相机" "\n"
+      "前车ID")
+    struct CameraMsg {
+      int32__5 id_1;
+
+      @verbatim (language="comment", text=
+        "前车位置")
+      geometry_msgs__msg__PoseStamped__5 enemy_pose_1;
+
+      @verbatim (language="comment", text=
+        "右相机" "\n"
+        "前车ID")
+      int32__5 id_2;
+
+      @verbatim (language="comment", text=
+        "前车位置")
+      geometry_msgs__msg__PoseStamped__5 enemy_pose_2;
+
+      @verbatim (language="comment", text=
+        "后相机" "\n"
+        "前车ID")
+      int32__5 id_3;
+
+      @verbatim (language="comment", text=
+        "前车位置")
+      geometry_msgs__msg__PoseStamped__5 enemy_pose_3;
+
+      @verbatim (language="comment", text=
+        "左相机" "\n"
+        "前车ID")
+      int32__5 id_4;
+
+      @verbatim (language="comment", text=
+        "前车位置")
+      geometry_msgs__msg__PoseStamped__5 enemy_pose_4;
+
+      @verbatim (language="comment", text=
+        "前车移动预测（x方向速度，y方向速度）")
+      float__5 speed_x;
+
+      float__5 speed_y;
+    };
+  };
+};

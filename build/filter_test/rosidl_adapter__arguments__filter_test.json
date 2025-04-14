@@ -1,0 +1,7 @@
+{
+  "package_name": "filter_test",
+  "non_idl_tuples": [
+    "/home/chakfan/double_model/src/filter_test:msg/Simulation.msg",
+    "/home/chakfan/double_model/src/filter_test:msg/Result.msg"
+  ]
+}

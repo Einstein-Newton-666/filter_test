@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "filter_test__py",
+		"source" : "/home/chakfan/double_model/build/filter_test/filter_test__py"
+	}
+}

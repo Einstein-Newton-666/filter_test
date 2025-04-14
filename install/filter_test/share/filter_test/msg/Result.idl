@@ -1,0 +1,51 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from filter_test/msg/Result.msg
+// generated code does not contain a copyright notice
+
+#include "geometry_msgs/msg/Point.idl"
+#include "geometry_msgs/msg/Vector3.idl"
+#include "std_msgs/msg/Header.idl"
+
+module filter_test {
+  module msg {
+    struct Result {
+      std_msgs::msg::Header header;
+
+      geometry_msgs::msg::Point position;
+
+      geometry_msgs::msg::Vector3 velocity;
+
+      double yaw;
+
+      double v_yaw;
+
+      double radius_1;
+
+      double radius_2;
+
+      double dz;
+
+      double position_x_diff;
+
+      double position_y_diff;
+
+      double position_z1_diff;
+
+      double position_z2_diff;
+
+      double position_yaw_diff;
+
+      double velocity_x_diff;
+
+      double velocity_y_diff;
+
+      double velocity_yaw_diff;
+
+      double r1_diff;
+
+      double r2_diff;
+
+      int32 match_size;
+    };
+  };
+};

@@ -1,0 +1,32 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from filter_test/msg/Simulation.msg
+// generated code does not contain a copyright notice
+
+#include "auto_aim_interfaces/msg/Armors.idl"
+#include "geometry_msgs/msg/Point.idl"
+#include "geometry_msgs/msg/Vector3.idl"
+#include "std_msgs/msg/Header.idl"
+
+module filter_test {
+  module msg {
+    struct Simulation {
+      std_msgs::msg::Header header;
+
+      auto_aim_interfaces::msg::Armors armors;
+
+      geometry_msgs::msg::Point position;
+
+      geometry_msgs::msg::Vector3 velocity;
+
+      double yaw;
+
+      double v_yaw;
+
+      double radius_1;
+
+      double radius_2;
+
+      double dz;
+    };
+  };
+};

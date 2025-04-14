@@ -1,0 +1,6 @@
+float32 abs_angle
+float32 aim_pose_diff
+float32 predict_time
+float32 current_velocity
+float32 last_velocity
+float32 velocity_diff
