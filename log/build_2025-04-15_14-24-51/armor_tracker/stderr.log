@@ -1,0 +1,55 @@
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker.cpp:[m[K In member function ‘[01m[Kvoid rm_auto_aim::Tracker::updateArmorModel()[m[K’:
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker.cpp:108:35:[m[K [01;31m[Kerror: [m[Kexpected ‘[01m[K,[m[K’ or ‘[01m[K;[m[K’ before ‘[01m[K=[m[K’ token
+  108 |             Eigen::VectorXd x0(7) [01;31m[K=[m[K {armor.x, 0, armor.y, 0, armor.z, 0, armor.orientation_yaw};
+      |                                   [01;31m[K^[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:[m[K In member function ‘[01m[Kvoid rm_auto_aim::ArmorTrackerNode::armorsCallback(auto_aim_interfaces::msg::Armors_<std::allocator<void> >::SharedPtr)[m[K’:
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:194:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  194 |         armor_info.position.x = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[0];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:195:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  195 |         armor_info.position.y = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[2];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:196:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  196 |         armor_info.position.z = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[4];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:197:48:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  197 |         armor_info.orientation_yaw = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[6];
+      |                                                [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:198:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  198 |         armor_info.velocity.x = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[1];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:199:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  199 |         armor_info.velocity.y = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[3];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:200:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  200 |         armor_info.velocity.z = tracker_->[01;31m[Kfilters[m[K[i].pri_estimation[5];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:202:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  202 |         armor_info.position.x = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[0];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:203:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  203 |         armor_info.position.y = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[2];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:204:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  204 |         armor_info.position.z = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[4];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:205:48:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  205 |         armor_info.orientation_yaw = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[6];
+      |                                                [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:206:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  206 |         armor_info.velocity.x = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[1];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:207:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  207 |         armor_info.velocity.y = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[3];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:208:43:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  208 |         armor_info.velocity.z = tracker_->[01;31m[Kfilters[m[K[i].post_estimation[5];
+      |                                           [01;31m[K^~~~~~~[m[K
+[01m[K/home/chakfan/double_model/src/armor_tracker/src/tracker_node.cpp:209:42:[m[K [01;31m[Kerror: [m[K‘[01m[Kclass rm_auto_aim::Tracker[m[K’ has no member named ‘[01m[Kfilters[m[K’
+  209 |         armor_info.tracking = (tracker_->[01;31m[Kfilters[m[K[i].tracker_state != LOST) ? true : false;// 只要不是丢失状态，就认为tracking为true
+      |                                          [01;31m[K^~~~~~~[m[K
+gmake[2]: *** [CMakeFiles/armor_tracker.dir/build.make:146：CMakeFiles/armor_tracker.dir/src/tracker_node.cpp.o] 错误 1
+gmake[2]: *** 正在等待未完成的任务....
+gmake[2]: *** [CMakeFiles/armor_tracker.dir/build.make:132：CMakeFiles/armor_tracker.dir/src/tracker.cpp.o] 错误 1
+gmake[1]: *** [CMakeFiles/Makefile2:139：CMakeFiles/armor_tracker.dir/all] 错误 2
+gmake: *** [Makefile:146：all] 错误 2

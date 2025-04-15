@@ -14,8 +14,8 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     yaw = 0;
     x_v = 0.; 
     y_v = -0.;
-    yaw_v = 5.0;
-    x_a = 0.5, y_a = 0.5, yaw_a = 0.3;
+    yaw_v =5.0;
+    x_a = 0.0, y_a = 0.5, yaw_a = 0;
     z1 = 0.3, z2 = 0.2;
     r1 = 0.25, r2 = 0.35;
  // 初始化last_t
@@ -74,8 +74,6 @@ void ArmorSimulation::publishSimulation() {
     marker_array_.markers.clear();
     armor_marker_.id = 0;
 
-
-
     //发布可见装甲板位姿
     for (size_t i = 0; i < 4; i++)
     {
@@ -97,10 +95,10 @@ void ArmorSimulation::publishSimulation() {
             armor.number = "4";
             armors_msg.armors.push_back(armor);
             sim_msg.armors.armors.push_back(armor);
-            RCLCPP_INFO(this->get_logger(), "第%ld个装甲板,x: %f,y: %f,z: %f,armor_yaw: %f", i, armor.pose.position.x,
-                                                                                              armor.pose.position.y,
-                                                                                              armor.pose.position.z,
-                                                                                              armor_yaw);
+            // RCLCPP_INFO(this->get_logger(), "第%ld个装甲板,x: %f,y: %f,z: %f,armor_yaw: %f", i, armor.pose.position.x,
+            //                                                                                   armor.pose.position.y,
+            //                                                                                   armor.pose.position.z,
+            //                                                                                   armor_yaw);
         }
 
         armor_marker_.id++;

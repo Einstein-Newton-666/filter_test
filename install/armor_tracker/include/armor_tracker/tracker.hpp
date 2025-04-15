@@ -21,7 +21,10 @@ class Tracker
 public:
     using Armors = auto_aim_interfaces::msg::Armors;
     using Armor = auto_aim_interfaces::msg::Armor;
-    Tracker() = default;
+    Tracker(){
+        this->enemy_model = EnemyModel();
+        this->armor_model = ArmorModel();
+    };
 
     void initArmorModel();
     void initEnemyModel();
@@ -31,6 +34,7 @@ public:
 
     bool findTrackerArmor(const auto_aim_interfaces::msg::Armors::SharedPtr & armors_msg);
     bool updateTrackerArmor(const auto_aim_interfaces::msg::Armors::SharedPtr & armors_msg);
+
 
     double dt;
     EnemyModel enemy_model; //TODO：是否需要用到智能指针？

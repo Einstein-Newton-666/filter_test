@@ -16,8 +16,8 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions &options)
 
     // Tracker
     tracker_ = std::make_unique<Tracker>();
-    tracker_->armor_model.tracking_thres = this->declare_parameter("ArmorModel.tracking_thres", 5);
-    tracker_->enemy_model.tracking_thres = this->declare_parameter("EnemyModel.tracking_thres", 5);
+    tracker_->armor_model.tracking_thres = this->declare_parameter("ArmorModel.tracking_thres", 2);
+    tracker_->enemy_model.tracking_thres = this->declare_parameter("EnemyModel.tracking_thres", 1);
 
     s2qx_armor = declare_parameter("ArmorModel.s2qx_", 10.0);
     s2qy_armor = declare_parameter("ArmorModel.s2qy_", 10.0);
@@ -45,6 +45,8 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions &options)
     lost_time_thres_armor_ = declare_parameter("ArmorModel.lost_time_thres", 0.3);
     lost_time_thres_enemy_ = declare_parameter("EnemyModel.lost_time_thres", 0.3);
 
+    last_time_ = this->now();
+
     // Subscriber with tf2 message_filter
     // tf2 relevant
     tf2_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -55,13 +57,15 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions &options)
     tf2_buffer_->setCreateTimerInterface(timer_interface);
     tf2_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf2_buffer_);
     // subscriber and filter
-    armors_sub_.subscribe(this, "/detector/armors", rmw_qos_profile_sensor_data);
+    armors_sub_ = this->create_subscription<auto_aim_interfaces::msg::Armors>(
+    "/detector/armors", rclcpp::SensorDataQoS(), bind(&ArmorTrackerNode::armorsCallback,this,std::placeholders::_1));
+    // armors_sub_.subscribe(this, "/detector/armors", rmw_qos_profile_sensor_data);
     target_frame_ = this->declare_parameter("target_frame", "odom");
-    tf2_filter_ = std::make_shared<tf2_filter>(
-            armors_sub_, *tf2_buffer_, target_frame_, 10, this->get_node_logging_interface(),
-            this->get_node_clock_interface(), std::chrono::duration<int>(1));
-    // Register a callback with tf2_ros::MessageFilter to be called when transforms are available
-    tf2_filter_->registerCallback(&ArmorTrackerNode::armorsCallback, this);
+    // tf2_filter_ = std::make_shared<tf2_filter>(
+    //         armors_sub_, *tf2_buffer_, target_frame_, 10, this->get_node_logging_interface(),
+    //         this->get_node_clock_interface(), std::chrono::duration<int>(1));
+    // // Register a callback with tf2_ros::MessageFilter to be called when transforms are available
+    // tf2_filter_->registerCallback(&ArmorTrackerNode::armorsCallback, this);
 
     // Measurement publisher (for debug usage)
     info_pub_ = this->create_publisher<auto_aim_interfaces::msg::TrackerInfo>("/tracker/info", 10);
@@ -101,27 +105,31 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions &options)
     armor_marker_.color.g = 1.0;
     enemy_marker_.ns = "enemy";
     enemy_marker_.type = visualization_msgs::msg::Marker::CUBE;//立方体
-    armor_marker_.scale.x = 0.03;
-    armor_marker_.scale.z = 0.125;
-    armor_marker_.color.a = 1.0;
-    armor_marker_.color.r = 1.0;
+    enemy_marker_.scale.x = 0.03;
+    enemy_marker_.scale.y = 0.1;
+    enemy_marker_.scale.z = 0.1;
+    enemy_marker_.color.a = 1.0;
+    enemy_marker_.color.r = 1.0;
     marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/tracker/marker", 10);
+
+    // RCLCPP_INFO(this->get_logger(), "TrackerNode 初始化完成!");
 }
 
 void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::SharedPtr armors_msg) {
+    // RCLCPP_INFO(this->get_logger(), "进入armorsCallback！");
     update_params();
     // Tranform armor position from image frame to world coordinate
-    for (auto &armor: armors_msg->armors) {
-        geometry_msgs::msg::PoseStamped ps;
-        ps.header = armors_msg->header;
-        ps.pose = armor.pose;
-        try {
-            armor.pose = tf2_buffer_->transform(ps, target_frame_).pose;
-        } catch (const tf2::ExtrapolationException &ex) {
-            RCLCPP_ERROR(get_logger(), "Error while transforming %s", ex.what());
-            return;
-        }
-    }
+    // for (auto &armor: armors_msg->armors) {
+    //     geometry_msgs::msg::PoseStamped ps;
+    //     ps.header = armors_msg->header;
+    //     ps.pose = armor.pose;
+    //     try {
+    //         armor.pose = tf2_buffer_->transform(ps, target_frame_).pose;
+    //     } catch (const tf2::ExtrapolationException &ex) {
+    //         RCLCPP_ERROR(get_logger(), "Error while transforming %s", ex.what());
+    //         return;
+    //     }
+    // }
 
     // Filter abnormal armors
     armors_msg->armors.erase(
@@ -145,19 +153,26 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
             target_frame_;
 
     dt_ = (time - last_time_).seconds();
+    // RCLCPP_INFO(this->get_logger(), "armorsCallback dt: %f", dt_);
     last_time_ = time;
     tracker_->dt = dt_;
     tracker_->armor_model.lost_thres = static_cast<int>(lost_time_thres_armor_ / dt_);
     tracker_->enemy_model.lost_thres = static_cast<int>(lost_time_thres_enemy_ / dt_);
     if (tracker_->enemy_model.tracker_state == LOST) {// TODO:优化模型初始化条件
+        // RCLCPP_INFO(this->get_logger(), "模型初始化!");
         tracker_->findTrackerArmor(armors_msg);
+        tracker_->updateTrackerArmor(armors_msg);
         tracker_->initArmorModel();
-        tracker_->initEnemyModel();
+        tracker_->initEnemyModel(); // TODO：优化代码
+
+
     } else {
+        std::cout<<"模型更新"<<std::endl;
         tracker_->updateTrackerArmor(armors_msg);
         tracker_->updateArmorModel();
         tracker_->updateEnemyModel();
     }
+
     int index = 0;
     for(const auto& armor : tracker_->tracked_armors){
         if(index > 1){ break;} //armors是定长数组，避免越界访问
@@ -171,51 +186,60 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
         armor_info.distance = armor.distance;
         tracker_info.armors[index++] = armor_info;
     }
-    index = 0;
-    for(const auto& filter : tracker_->armor_model.filters){
-        if(index > 1){ break;} //armors是定长数组，避免越界访问
-        auto_aim_interfaces::msg::ArmorInfo armor_info;
-        armor_info.position.x = filter.second.pri_estimation[0];
-        armor_info.position.y = filter.second.pri_estimation[2];
-        armor_info.position.z = filter.second.pri_estimation[4];
-        armor_info.orientation_yaw = filter.second.pri_estimation[6];
-        armor_info.velocity.x = filter.second.pri_estimation[1];
-        armor_info.velocity.y = filter.second.pri_estimation[3];
-        armor_info.velocity.z = filter.second.pri_estimation[5];
-        tracker_predict.armors[index++] = armor_info;
-        armor_info.position.x = filter.second.post_estimation[0];
-        armor_info.position.y = filter.second.post_estimation[2];
-        armor_info.position.z = filter.second.post_estimation[4];
-        armor_info.orientation_yaw = filter.second.post_estimation[6];
-        armor_info.velocity.x = filter.second.post_estimation[1];
-        armor_info.velocity.y = filter.second.post_estimation[3];
-        armor_info.velocity.z = filter.second.post_estimation[5];
-        armor_info.tracking = (filter.second.tracker_state != LOST) ? true : false;// 只要不是丢失状态，就认为tracking为true
-        tracker_target.armors[index++] = armor_info;
+    // std::cout<<"追踪armor信息更新!"<<std::endl;
+
+    for(size_t i = 1; i<=2; i++){
+        if(tracker_->armor_model.filters[i].tracker_state == TEMP_LOST || tracker_->armor_model.filters[i].tracker_state == TRACKING){
+            auto_aim_interfaces::msg::ArmorInfo armor_info;
+            armor_info.position.x = tracker_->armor_model.filters[i].pri_estimation[0];
+            armor_info.position.y = tracker_->armor_model.filters[i].pri_estimation[2];
+            armor_info.position.z = tracker_->armor_model.filters[i].pri_estimation[4];
+            armor_info.orientation_yaw = tracker_->armor_model.filters[i].pri_estimation[6];
+            armor_info.velocity.x = tracker_->armor_model.filters[i].pri_estimation[1];
+            armor_info.velocity.y = tracker_->armor_model.filters[i].pri_estimation[3];
+            armor_info.velocity.z = tracker_->armor_model.filters[i].pri_estimation[5];
+            tracker_predict.armors[i-1] = armor_info;
+            armor_info.position.x = tracker_->armor_model.filters[i].post_estimation[0];
+            armor_info.position.y = tracker_->armor_model.filters[i].post_estimation[2];
+            armor_info.position.z = tracker_->armor_model.filters[i].post_estimation[4];
+            armor_info.orientation_yaw = tracker_->armor_model.filters[i].post_estimation[6];
+            armor_info.velocity.x = tracker_->armor_model.filters[i].post_estimation[1];
+            armor_info.velocity.y = tracker_->armor_model.filters[i].post_estimation[3];
+            armor_info.velocity.z = tracker_->armor_model.filters[i].post_estimation[5];
+            armor_info.tracking = (tracker_->armor_model.filters[i].tracker_state != LOST) ? true : false;// 只要不是丢失状态，就认为tracking为true
+            tracker_target.armors[i-1] = armor_info;
+            std::cout<<"装甲板模型"<<i<<"更新!"<<std::endl;
+        }
     }
 
-    tracker_predict.enemy.position.x = tracker_->enemy_model.pri_estimation[0];
-    tracker_predict.enemy.position.y = tracker_->enemy_model.pri_estimation[2];
-    tracker_predict.enemy.position.z = tracker_->enemy_model.pri_estimation[4];
-    tracker_predict.enemy.orientation_yaw = tracker_->enemy_model.pri_estimation[6];
-    tracker_predict.enemy.velocity.x = tracker_->enemy_model.pri_estimation[1];
-    tracker_predict.enemy.velocity.y = tracker_->enemy_model.pri_estimation[3];
-    tracker_predict.enemy.radius_1 = tracker_->enemy_model.pri_estimation[8];
-    tracker_predict.enemy.radius_2 = tracker_->enemy_model.pri_estimation[9];
-    tracker_predict.enemy.dz = tracker_->enemy_model.pri_estimation[5] - tracker_->enemy_model.pri_estimation[4];
+    // std::cout<<"追踪后验估计更新!"<<std::endl;
+    if(tracker_->enemy_model.tracker_state == TEMP_LOST || tracker_->enemy_model.tracker_state == TRACKING){
+        tracker_predict.enemy.position.x = tracker_->enemy_model.pri_estimation[0];
+        tracker_predict.enemy.position.y = tracker_->enemy_model.pri_estimation[2];
+        tracker_predict.enemy.position.z = tracker_->enemy_model.pri_estimation[4];
+        tracker_predict.enemy.orientation_yaw = tracker_->enemy_model.pri_estimation[6];
+        tracker_predict.enemy.velocity.x = tracker_->enemy_model.pri_estimation[1];
+        tracker_predict.enemy.velocity.y = tracker_->enemy_model.pri_estimation[3];
+        tracker_predict.enemy.radius_1 = tracker_->enemy_model.pri_estimation[8];
+        tracker_predict.enemy.radius_2 = tracker_->enemy_model.pri_estimation[9];
+        tracker_predict.enemy.dz = tracker_->enemy_model.pri_estimation[5] - tracker_->enemy_model.pri_estimation[4];
+        // std::cout<<"x: "<<tracker_->enemy_model.pri_estimation[0]<<"y: "<<tracker_->enemy_model.pri_estimation[2]<<std::endl;
+        tracker_target.id = tracker_->trackered_enemy_id;
+        tracker_target.armors_num = tracker_->enemy_armor_num;
+        tracker_target.enemy.position.x = tracker_->enemy_model.post_estimation[0];
+        tracker_target.enemy.position.y = tracker_->enemy_model.post_estimation[2];
+        tracker_target.enemy.position.z = tracker_->enemy_model.post_estimation[4];
+        tracker_target.enemy.orientation_yaw = tracker_->enemy_model.post_estimation[6];
+        tracker_target.enemy.velocity.x = tracker_->enemy_model.post_estimation[1];
+        tracker_target.enemy.velocity.y = tracker_->enemy_model.post_estimation[3];
+        tracker_target.enemy.radius_1 = tracker_->enemy_model.post_estimation[8];
+        tracker_target.enemy.radius_2 = tracker_->enemy_model.post_estimation[9];
+        tracker_target.enemy.dz = tracker_->enemy_model.post_estimation[5] - tracker_->enemy_model.post_estimation[4];
+        tracker_target.enemy.tracking = (tracker_->enemy_model.tracker_state != LOST) ? true : false;// 只要不是丢失状态，就认为tracking为true
+        // std::cout<<"发布先验估计值和后验估计值！"<<std::endl;
+    }
 
-    tracker_target.id = tracker_->trackered_enemy_id;
-    tracker_target.armors_num = tracker_->enemy_armor_num;
-    tracker_target.enemy.position.x = tracker_->enemy_model.post_estimation[0];
-    tracker_target.enemy.position.y = tracker_->enemy_model.post_estimation[2];
-    tracker_target.enemy.position.z = tracker_->enemy_model.post_estimation[4];
-    tracker_target.enemy.orientation_yaw = tracker_->enemy_model.post_estimation[6];
-    tracker_target.enemy.velocity.x = tracker_->enemy_model.post_estimation[1];
-    tracker_target.enemy.velocity.y = tracker_->enemy_model.post_estimation[3];
-    tracker_target.enemy.radius_1 = tracker_->enemy_model.post_estimation[8];
-    tracker_target.enemy.radius_2 = tracker_->enemy_model.post_estimation[9];
-    tracker_target.enemy.dz = tracker_->enemy_model.post_estimation[5] - tracker_->enemy_model.post_estimation[4];
-    tracker_target.enemy.tracking = (tracker_->enemy_model.tracker_state != LOST) ? true : false;// 只要不是丢失状态，就认为tracking为true
+    // RCLCPP_INFO(this->get_logger(), "追踪后验估计更新!");
 
     info_pub_->publish(tracker_info);
     predict_pub_->publish(tracker_predict);
@@ -223,6 +247,7 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
     if (debug_) {
         publishMarkers(tracker_target);
     }
+    std::cout<<"---------------------------------"<<std::endl;
 }
 
 // TODO:两个模型的可视化
@@ -334,6 +359,17 @@ void ArmorTrackerNode::update_params() {
     lost_time_thres_armor_ = this->get_parameter("ArmorModel.lost_time_thres").as_double();
     position_diff_thres_ = this->get_parameter("ArmorModel.position_diff_thres").as_double();
 
+    tracker_->armor_model.s2qx_ = s2qx_armor;
+    tracker_->armor_model.s2qy_ = s2qy_armor;
+    tracker_->armor_model.s2qz_ = s2qz_armor;
+    tracker_->armor_model.s2qyaw_ = s2qyaw_armor;
+    tracker_->armor_model.r_x = r_x_armor;
+    tracker_->armor_model.r_y = r_y_armor;
+    tracker_->armor_model.r_z = r_z_armor;
+    tracker_->armor_model.r_yaw = r_yaw_armor;
+    tracker_->armor_model.lost_thres = lost_time_thres_armor_;
+    tracker_->armor_model.position_diff_thres = position_diff_thres_;
+
     // Update EnemyModel parameters
     s2qxy_max_enemy = this->get_parameter("EnemyModel.s2qxy_max_").as_double();
     s2qxy_min_enemy = this->get_parameter("EnemyModel.s2qxy_min_").as_double();
@@ -345,6 +381,18 @@ void ArmorTrackerNode::update_params() {
     r_distance_enemy = this->get_parameter("EnemyModel.r_distance_").as_double();
     r_yaw_enemy = this->get_parameter("EnemyModel.r_yaw_").as_double();
     lost_time_thres_enemy_ = this->get_parameter("EnemyModel.lost_time_thres").as_double();
+
+    tracker_->enemy_model.s2qxy_max_ = s2qxy_max_enemy;
+    tracker_->enemy_model.s2qxy_min_ = s2qxy_min_enemy;
+    tracker_->enemy_model.s2qz_ = s2qz_enemy;
+    tracker_->enemy_model.s2qyaw_max_ = s2qyaw_max_enemy;
+    tracker_->enemy_model.s2qyaw_min_ = s2qyaw_min_enemy;
+    tracker_->enemy_model.s2qr_ = s2qr_enemy;
+    tracker_->enemy_model.r_pose = r_pose_enemy;
+    tracker_->enemy_model.r_distance = r_distance_enemy;
+    tracker_->enemy_model.r_yaw = r_yaw_enemy;
+    tracker_->enemy_model.lost_thres = lost_time_thres_enemy_;
+
 }
 
 }  // namespace rm_auto_aim

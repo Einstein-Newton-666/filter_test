@@ -31,6 +31,6 @@ def generate_launch_description():
 )
 
     return LaunchDescription([
-        # tracker_node,
+        tracker_node,
         armor_simulation_node
         ])

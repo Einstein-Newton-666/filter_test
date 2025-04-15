@@ -97,6 +97,9 @@ private:
 
 class EnemyModel {
 public:
+    EnemyModel(){
+        ekf = ExtendedKalmanFilter();
+    }
     Eigen::MatrixXd update_Q(const double& dt);
     Eigen::MatrixXd update_R(const Eigen::VectorXd &z);
 

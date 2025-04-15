@@ -4,12 +4,14 @@ namespace rm_auto_aim{
 
 Eigen::MatrixXd EnemyModel::update_Q(const double& dt){
     Eigen::Matrix<double,10,10> q;
-    double vx = pri_estimation[1], vy = pri_estimation[3], v_yaw = pri_estimation[7];
-    double dx = pow(pow(vx, 2) + pow(vy, 2), 0.5), dy = abs(v_yaw);
+    // double vx = pri_estimation[1], vy = pri_estimation[3], v_yaw = pri_estimation[7];
+    // double dx = pow(pow(vx, 2) + pow(vy, 2), 0.5), dy = abs(v_yaw);
     double x,y;
     double t = dt,r = s2qr_;
-    x = exp(-dy) * (s2qxy_max_ - s2qxy_min_) + s2qxy_min_;// TODO：对比验证固定噪声参数和该可变噪声参数哪个效果好
-    y = exp(-dx) * (s2qyaw_max_ - s2qyaw_min_) + s2qyaw_min_;
+    // x = exp(-dy) * (s2qxy_max_ - s2qxy_min_) + s2qxy_min_;// TODO：对比验证固定噪声参数和该可变噪声参数哪个效果好
+    // y = exp(-dx) * (s2qyaw_max_ - s2qyaw_min_) + s2qyaw_min_;
+    x = s2qxy_max_;
+    y = s2qyaw_max_;
     double q_x_x = pow(t, 4) / 4 * x, q_x_vx = pow(t, 3) / 2 * x, q_vx_vx = pow(t, 2) * x;
     double q_y_y = pow(t, 4) / 4 * y, q_y_vy = pow(t, 3) / 2 * y, q_vy_vy = pow(t, 2) * y;
     double q_r = pow(t, 4)/ 4 * r;

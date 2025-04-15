@@ -3,6 +3,7 @@
 
 
 #include <map>
+#include <iostream>
 #include "armor_tracker/common.hpp"
 #include "armor_tracker/filter/kalman_filter.hpp"
 
@@ -50,6 +51,8 @@ struct FuncA{
         A(0, 1) = dt;
         A(2, 3) = dt;
         A(4, 5) = dt; 
+        std::cout<<"A如下："<<std::endl;
+        std::cout<<A<<std::endl;
     }
 
     double dt;
@@ -59,10 +62,12 @@ struct FuncH{
     template <typename T>
     void operator()(T& H){
         H = T::Zero();
-        for(int i = 0; i < Z_N; i++){
-            for(int j = 0; j < X_N; j+=2)
-                H(i, j) = 1.;
-        }
+        H(0, 0) = 1.; // 对应 x
+        H(1, 2) = 1.; // 对应 y
+        H(2, 4) = 1.; // 对应 z
+        H(3, 6) = 1.; // 对应 yaw
+        std::cout<<"H如下："<<std::endl;
+        std::cout<<H<<std::endl;
     }
 };
 
@@ -93,21 +98,25 @@ public:
 
 class ArmorModel {
 public:
-    ArmorModel(){}
+    ArmorModel(){
+        filters[1] = ArmorTracker();
+        filters[2] = ArmorTracker();
+    }
 
     void initFilter(const Eigen::VectorXd& x0,const int& index);
 
     Eigen::MatrixXd update_Q(const double& dt);
     Eigen::MatrixXd update_R(const Eigen::Matrix<double, Z_N, 1> &z);
 
-    std::map<int, ArmorTracker> filters;
+    std::map<int, ArmorTracker> filters; //对于一辆车来说最多可以看到2个装甲板，会不会直接实例化两个跟踪器更好管理？
 
     double position_diff_thres;
     int tracking_thres;
     int lost_thres;
-private:
     double s2qx_, s2qy_, s2qz_, s2qyaw_; // 过程噪声方差
     double r_x, r_y, r_z, r_yaw; // 观测噪声方差
+private:
+
 };
 
 

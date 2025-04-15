@@ -51,7 +51,8 @@ private:
     std::shared_ptr <tf2_ros::Buffer> tf2_buffer_;
     std::shared_ptr <tf2_ros::TransformListener> tf2_listener_;
     std::shared_ptr <tf2_filter> tf2_filter_;
-    message_filters::Subscriber <auto_aim_interfaces::msg::Armors> armors_sub_;
+    // message_filters::Subscriber <auto_aim_interfaces::msg::Armors> armors_sub_;
+      rclcpp::Subscription<auto_aim_interfaces::msg::Armors>::SharedPtr armors_sub_;
 
     // Tracker publisher
     rclcpp::Publisher<auto_aim_interfaces::msg::TrackerInfo>::SharedPtr info_pub_;

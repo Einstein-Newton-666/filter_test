@@ -104,7 +104,7 @@ public:
         this->x_e.resize(h.input_size);
         this->P_mat.resize(h.input_size, h.input_size);
         Eigen::MatrixXd K = P_mat * measure_result.H.transpose() * (measure_result.H * P_mat * measure_result.H.transpose() + R).inverse();
-        int match_size = h.input_size/4;
+        int match_size = h.output_size/4;
         Eigen::VectorXd innovation = z - measure_result.z_pri;
         for(int i = 0; i < match_size; i++){
             innovation(3+i*4) = _std_radian(innovation(3+i*4));

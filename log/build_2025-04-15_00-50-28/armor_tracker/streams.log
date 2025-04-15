@@ -1,0 +1,41 @@
+[0.015s] Invoking command in '/home/chakfan/double_model/build/armor_tracker': CMAKE_PREFIX_PATH=/home/chakfan/double_model/install/auto_aim_interfaces:/home/chakfan/double_model/install/filter_test:/home/chakfan/double_model/install/armor_tracker:/opt/ros/humble LD_LIBRARY_PATH=/home/chakfan/double_model/install/auto_aim_interfaces/lib:/home/chakfan/double_model/install/filter_test/lib:/home/chakfan/double_model/install/armor_tracker/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32 /usr/local/bin/cmake --build /home/chakfan/double_model/build/armor_tracker -- -j32 -l32
+[0.053s] [ 22%] Built target armor_tracker_node
+[0.062s] [100%] Built target armor_tracker
+[0.068s] Invoked command in '/home/chakfan/double_model/build/armor_tracker' returned '0': CMAKE_PREFIX_PATH=/home/chakfan/double_model/install/auto_aim_interfaces:/home/chakfan/double_model/install/filter_test:/home/chakfan/double_model/install/armor_tracker:/opt/ros/humble LD_LIBRARY_PATH=/home/chakfan/double_model/install/auto_aim_interfaces/lib:/home/chakfan/double_model/install/filter_test/lib:/home/chakfan/double_model/install/armor_tracker/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32 /usr/local/bin/cmake --build /home/chakfan/double_model/build/armor_tracker -- -j32 -l32
+[0.070s] Invoking command in '/home/chakfan/double_model/build/armor_tracker': CMAKE_PREFIX_PATH=/home/chakfan/double_model/install/auto_aim_interfaces:/home/chakfan/double_model/install/filter_test:/home/chakfan/double_model/install/armor_tracker:/opt/ros/humble LD_LIBRARY_PATH=/home/chakfan/double_model/install/auto_aim_interfaces/lib:/home/chakfan/double_model/install/filter_test/lib:/home/chakfan/double_model/install/armor_tracker/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32 /usr/local/bin/cmake --install /home/chakfan/double_model/build/armor_tracker
+[0.074s] -- Install configuration: ""
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/lib/armor_tracker/armor_tracker_node
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/tracker_node.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/filter
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/filter/kalman_filter.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/filter/extended_kalman_filter.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/tracker.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/motion
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/motion/armor_model.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/motion/enemy_model.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/include/armor_tracker/common.hpp
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/environment/library_path.sh
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/environment/library_path.dsv
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/lib/libarmor_tracker.so
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/ament_index/resource_index/package_run_dependencies/armor_tracker
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/ament_index/resource_index/parent_prefix_path/armor_tracker
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/environment/ament_prefix_path.sh
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/environment/ament_prefix_path.dsv
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/environment/path.sh
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/environment/path.dsv
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/local_setup.bash
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/local_setup.sh
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/local_setup.zsh
+[0.074s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/local_setup.dsv
+[0.075s] -- Installing: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/package.dsv
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/ament_index/resource_index/packages/armor_tracker
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/ament_index/resource_index/rclcpp_components/armor_tracker
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/cmake/ament_cmake_export_dependencies-extras.cmake
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/cmake/ament_cmake_export_include_directories-extras.cmake
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/cmake/ament_cmake_export_libraries-extras.cmake
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/cmake/armor_trackerConfig.cmake
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/cmake/armor_trackerConfig-version.cmake
+[0.075s] -- Up-to-date: /home/chakfan/double_model/install/armor_tracker/share/armor_tracker/package.xml
+[0.076s] Invoked command in '/home/chakfan/double_model/build/armor_tracker' returned '0': CMAKE_PREFIX_PATH=/home/chakfan/double_model/install/auto_aim_interfaces:/home/chakfan/double_model/install/filter_test:/home/chakfan/double_model/install/armor_tracker:/opt/ros/humble LD_LIBRARY_PATH=/home/chakfan/double_model/install/auto_aim_interfaces/lib:/home/chakfan/double_model/install/filter_test/lib:/home/chakfan/double_model/install/armor_tracker/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32:/opt/MVS/lib/64:/opt/MVS/lib/32 /usr/local/bin/cmake --install /home/chakfan/double_model/build/armor_tracker
