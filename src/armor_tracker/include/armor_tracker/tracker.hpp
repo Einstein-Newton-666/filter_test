@@ -43,6 +43,7 @@ public:
     std::string trackered_enemy_id; // 跟踪的装甲板id
     ArmorsNum enemy_armor_num; // 跟踪目标的装甲板数量
     std::vector<TrackedArmor> tracked_armors; // 追踪到的装甲板
+    bool changed_tracked_armor;
 private:
     double orientationToYaw(const geometry_msgs::msg::Quaternion & q);
 
@@ -51,6 +52,8 @@ private:
 
     template <typename T>
     void updateTrackerState(T& model,bool matched);
+
+    double last_dz;
 
 
 };

@@ -1,4 +1,0 @@
-Invoking command in '/home/chakfan/double_model/build/auto_aim_interfaces': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/local/bin/cmake --build /home/chakfan/double_model/build/auto_aim_interfaces -- -j32 -l32
-Invoked command in '/home/chakfan/double_model/build/auto_aim_interfaces' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/local/bin/cmake --build /home/chakfan/double_model/build/auto_aim_interfaces -- -j32 -l32
-Invoking command in '/home/chakfan/double_model/build/auto_aim_interfaces': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/local/bin/cmake --install /home/chakfan/double_model/build/auto_aim_interfaces
-Invoked command in '/home/chakfan/double_model/build/auto_aim_interfaces' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/opt/ros/humble /usr/local/bin/cmake --install /home/chakfan/double_model/build/auto_aim_interfaces

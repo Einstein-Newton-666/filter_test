@@ -105,10 +105,31 @@ public:
         this->P_mat.resize(h.input_size, h.input_size);
         Eigen::MatrixXd K = P_mat * measure_result.H.transpose() * (measure_result.H * P_mat * measure_result.H.transpose() + R).inverse();
         int match_size = h.output_size/4;
+        // Eigen::VectorXd z_pri = measure_result.z_pri;
+        // Eigen::VectorXd z_(4); 
+        // z_ << get_closest(z[0], z_pri[0], 2 * M_PI), 
+        //     get_closest(z[1], z_pri[1], 2 * M_PI),
+        //     z_pri[2],
+        //     get_closest(z[3], z_pri[3], 2 * M_PI);
+        // std::cout<<"z_: "<<z_<<std::endl;
+        // Eigen::VectorXd z_ = z;
+        // for(int i = 0; i < match_size; i++){
+        //     z_(3+i*4) = get_closest(z[3+i*4], z_pri[3], 2 * M_PI);
+        // }
+
+
         Eigen::VectorXd innovation = z - measure_result.z_pri;
         for(int i = 0; i < match_size; i++){
+            std::cout<<"innovation(3+i*4): "<<innovation(3+i*4)<<std::endl;
             innovation(3+i*4) = _std_radian(innovation(3+i*4));
+            std::cout<<"_std_radian(innovation(3+i*4)): "<<innovation(3+i*4)<<std::endl;
+            std::cout<<"===yaw==="<<std::endl;
         }
+        
+        // std::cout<<"===K==="<<std::endl;
+        // std::cout<<K<<std::endl;
+        // std::cout<<"===innovation==="<<std::endl;
+        // std::cout<<innovation<<std::endl;
         this->x_e = this->x_e + K * innovation;
         this->P_mat = (Eigen::MatrixXd::Identity(h.input_size, h.input_size) - K * measure_result.H) * this->P_mat;
     }
@@ -124,6 +145,25 @@ public:
         this->predict_forward(predict_func, Q);
         this->update_forward(measure_func, z, R);
     }
+
+    inline double get_closest(const double& cur, const double& tar, const double& period){
+        double times = period / (2. * M_PI);
+        double reduced = times * (reduced_angle(cur / times - M_PI) + M_PI);
+        double possibles[3] = { reduced - period, reduced, reduced + period };
+        double closest = possibles[0];
+        for (double possible: possibles) {
+            if (std::fabs(tar - possible) < std::fabs(tar - closest)) {
+                closest = possible;
+            }
+        }
+        return closest;
+    }
+
+    // 限制到 -pi ~ pi
+    inline double reduced_angle(const double& x) {
+        return std::atan2(std::sin(x), std::cos(x));
+    }
+
 
 
 private:

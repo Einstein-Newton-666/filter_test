@@ -97,9 +97,9 @@ private:
 
 class EnemyModel {
 public:
-    EnemyModel(){
-        ekf = ExtendedKalmanFilter();
-    }
+    EnemyModel() = default;
+    ~EnemyModel() {}
+
     Eigen::MatrixXd update_Q(const double& dt);
     Eigen::MatrixXd update_R(const Eigen::VectorXd &z);
 
@@ -116,7 +116,7 @@ public:
     int lost_thres;
 
     double s2qxy_max_, s2qxy_min_, s2qz_, s2qyaw_max_, s2qyaw_min_, s2qr_; // 过程噪声方差
-    double r_pose, r_distance, r_yaw; // 观测噪声方差
+    double r_yaw, r_picth, r_distance, r_orient_yaw; // 观测噪声方差
 };
 
 }

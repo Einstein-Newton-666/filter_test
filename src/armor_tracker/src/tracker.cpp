@@ -16,8 +16,15 @@ bool Tracker::findTrackerArmor(const auto_aim_interfaces::msg::Armors::SharedPtr
             tracked_armor = armor;
         }
     }
-    trackered_enemy_id = tracked_armor.number;
+    if(trackered_enemy_id != tracked_armor.number){
+        trackered_enemy_id = tracked_armor.number;
+        changed_tracked_armor = true;
+    }else{
+        changed_tracked_armor = false;
+    }
+    
     enemy_armor_num = (tracked_armor.number == "outpost")? OUTPOST_3 : NORMAL_4;
+    // TODO:优化装甲板切换
     // RCLCPP_INFO(rclcpp::get_logger("armor_tracker"), "跟踪目标：%s", trackered_enemy_id.c_str());
     return true;
 }
@@ -88,6 +95,8 @@ void Tracker::updateArmorModel(){
         // 遍历跟踪器装甲板，如果跟预测装甲板在阈值内，就更新跟踪器；
         // 如果不在阈值内，就重置跟踪器，将该装甲板作为跟踪器的初始状态
         for (const auto& armor : tracked_armors){
+            Eigen::VectorXd measurement (7);
+            measurement << armor.x, armor.y, armor.z, armor.orientation_yaw, armor.yaw, armor.pitch, armor.distance;
             // 找到最接近的跟踪器装甲板
             double min_diff = DBL_MAX;
             double position_diff = DBL_MAX;
@@ -106,6 +115,7 @@ void Tracker::updateArmorModel(){
             std::cout<<"position_diff: "<<position_diff<<std::endl;
             if(position_diff < armor_model.position_diff_thres){
                 Eigen::Matrix<double, 4, 1> z = {armor.x, armor.y, armor.z, armor.orientation_yaw};
+                armor_model.filters[best_index].measurement = measurement;
                 armor_model.filters[best_index].kf.update(FuncH(), z, armor_model.update_R(z));
                 armor_model.filters[best_index].matched = true;
                 std::cout<<"更新跟踪器"<<best_index<<"的装甲板"<<std::endl;
@@ -117,12 +127,14 @@ void Tracker::updateArmorModel(){
                 x0 << armor.x, 0, armor.y, 0, armor.z, 0, armor.orientation_yaw;
                 if(armor_model.filters[another_index].tracker_state != LOST){
                     armor_model.filters[best_index].kf.init(x0);
+                    armor_model.filters[best_index].measurement = measurement;
                     armor_model.filters[best_index].tracker_state = LOST;
                     armor_model.filters[best_index].matched = true;
                     std::cout<<"重置跟踪器"<<best_index<<"的装甲板"<<std::endl;
         
                 }else{
                     armor_model.filters[another_index].kf.init(x0);
+                    armor_model.filters[another_index].measurement = measurement;
                     armor_model.filters[another_index].tracker_state = LOST;
                     armor_model.filters[another_index].matched = true;
                     std::cout<<"初始化跟踪器"<<another_index<<"的装甲板"<<std::endl;
@@ -207,27 +219,28 @@ void Tracker::updateEnemyModel(){
             return std::abs(angles::shortest_angular_distance(observed_yaw, predicted_yaw));
         };
 
+
         std::vector<int> index;
         if (match_state == MATCH_SINGLE) {
             // RCLCPP_INFO(rclcpp::get_logger("armor_tracker"), "识别到一个装甲板！");
-            // const double obs_yaw = tracked_armors[0].orientation_yaw;
-            const Eigen::Vector3d pose = {
-                tracked_armors[0].x,
-                tracked_armors[0].y,
-                tracked_armors[0].z
-            };
+            const double obs_yaw = tracked_armors[0].orientation_yaw;
+            // const Eigen::Vector3d pose = {
+            //     tracked_armors[0].x,
+            //     tracked_armors[0].y,
+            //     tracked_armors[0].z
+            // };
             int best_idx = 0;
             double min_diff = DBL_MAX;
             for (int i = 0; i < 4; ++i) {
-                double orientation_yaw = x[6] + i * M_PI_2;
-                double xa = x[0] - cos(orientation_yaw) * x[8 + i % 2];
-                double ya = x[2] - sin(orientation_yaw) * x[8 + i % 2];
-                double za = i % 2 == 0 ? x[4] : x[5];
+                // double orientation_yaw = x[6] + i * M_PI_2;
+                // double xa = x[0] - cos(orientation_yaw) * x[8 + i % 2];
+                // double ya = x[2] - sin(orientation_yaw) * x[8 + i % 2];
+                // double za = i % 2 == 0 ? x[4] : x[5];
                 // TODO：优化匹配方式
-                double position_diff = (pose - Eigen::Vector3d(xa, ya, za)).norm();
-                // double yaw_diff = calculate_yaw_diff(i, obs_yaw);
+                // double position_diff = (pose - Eigen::Vector3d(xa, ya, za)).norm();
+                double yaw_diff = calculate_yaw_diff(i, obs_yaw);
                 // double diff = 0.7*position_diff/std::max(Eigen::Vector3d(xa, ya, za).norm(),1e-6)+0.3*yaw_diff/std::max(abs(orientation_yaw),1e-6); //TODO：优化匹配方式
-                double diff = position_diff;
+                double diff = yaw_diff;
                 if (diff < min_diff) {
                     min_diff = diff;
                     best_idx = i;
@@ -250,6 +263,7 @@ void Tracker::updateEnemyModel(){
             //TODO:优化匹配方式
             for (const auto& pair : adjacent_pairs) {
                 // 考虑两种顺序匹配可能性
+                // TODO：加一个旋转方向判断会不会更好？
                 const double diff1 = calculate_yaw_diff(pair.first, yaw1) + 
                                     calculate_yaw_diff(pair.second, yaw2);
                 const double diff2 = calculate_yaw_diff(pair.second, yaw1) + 
@@ -305,6 +319,11 @@ void Tracker::updateEnemyModel(){
         updateTrackerState(enemy_model, false);
     }
     // std::cout<<"更新敌人跟踪状态"<<std::endl;
+    double dz = enemy_model.post_estimation[5] - enemy_model.post_estimation[4];
+    if(dz * last_dz < 0){
+        RCLCPP_WARN(rclcpp::get_logger("armor_tracker"), "装甲板误匹配，当前匹配装甲板个数为%d",match_state);// TODO:优化判断误匹配的方式
+    }
+    last_dz = dz;
 }
 
 
@@ -322,11 +341,8 @@ double Tracker::orientationToYaw(const geometry_msgs::msg::Quaternion & q){
 // 防止两个半径发散,将两个半径限制在合理范围内
 template <typename T>
 void Tracker::preventRadiusSpread(T& model,Eigen::VectorXd& x,const double& idx){
-    if(x[idx] < 0.15){
-        x[idx] = 0.15;
-        model.setState(x);
-    }else if(x[idx] > 0.45){
-        x[idx] = 0.45;
+    if(x[idx] < 0.15 || x[idx] > 0.45){
+        std::clamp(x[idx],0.15,0.45);
         model.setState(x);
     }
 }

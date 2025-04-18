@@ -81,10 +81,11 @@ public:
     explicit ArmorTracker(const Eigen::VectorXd& x0){
         this->kf.init(x0);
     }
+    ~ArmorTracker() {};
     KF kf;
 
     TrackerState tracker_state;
-
+    Eigen::VectorXd measurement; // for debug
     Eigen::VectorXd pri_estimation;
     Eigen::VectorXd post_estimation;
 

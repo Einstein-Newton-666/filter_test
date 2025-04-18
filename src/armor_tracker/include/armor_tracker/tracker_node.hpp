@@ -35,6 +35,7 @@ using tf2_filter = tf2_ros::MessageFilter<auto_aim_interfaces::msg::Armors>;
 class ArmorTrackerNode : public rclcpp::Node {
 public:
     explicit ArmorTrackerNode(const rclcpp::NodeOptions &options);
+    
 
 private:
     void armorsCallback(const auto_aim_interfaces::msg::Armors::SharedPtr armors_ptr);
@@ -81,7 +82,7 @@ private:
     double position_diff_thres_, lost_time_thres_armor_;
     // Enemy model
     double s2qxy_max_enemy, s2qxy_min_enemy, s2qz_enemy, s2qyaw_max_enemy, s2qyaw_min_enemy, s2qr_enemy;
-    double r_pose_enemy, r_distance_enemy, r_yaw_enemy;
+    double r_yaw_enemy, r_picth_enemy, r_distance_enemy, r_orient_yaw_enemy;
     double lost_time_thres_enemy_;
 
     std::unique_ptr <Tracker> tracker_;

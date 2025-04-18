@@ -1,4 +1,0 @@
-source;share/filter_test/environment/ament_prefix_path.sh
-source;share/filter_test/environment/library_path.sh
-source;share/filter_test/environment/path.sh
-source;share/filter_test/environment/pythonpath.sh

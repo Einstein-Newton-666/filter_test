@@ -34,7 +34,7 @@ Eigen::MatrixXd EnemyModel::update_Q(const double& dt){
 Eigen::MatrixXd EnemyModel::update_R(const Eigen::VectorXd &z){
     Eigen::VectorXd r(z.size());
     for(int i = 0; i < (z.size() / 4); i++){
-        r.segment(i *4 , 4) << r_pose, r_pose, abs(r_distance * pow(z[i * 4 + 2],2)), r_yaw;
+        r.segment(i *4 , 4) << r_yaw, r_picth, r_distance * pow(z[i * 4 + 2],2), r_orient_yaw;
     }
     return r.asDiagonal();
 }

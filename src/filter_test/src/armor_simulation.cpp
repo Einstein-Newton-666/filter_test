@@ -3,7 +3,7 @@
 ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options) 
 : Node("armor_simulation", options) {
     // 参数声明
-    publish_rate = 100;
+    publish_rate = 10;
     linear_limit = 3, angle_limit = M_PI * 2; // 位姿和角度限制
     linear_speed_limit = 1.0, angle_speed_limit = 8.0; // 线速度和角速度限制
     linear_acc = 0.1, angle_acc = M_PI_4 /2; // 线角速度和角加速度
@@ -14,8 +14,8 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     yaw = 0;
     x_v = 0.; 
     y_v = -0.;
-    yaw_v =5.0;
-    x_a = 0.0, y_a = 0.5, yaw_a = 0;
+    yaw_v = 5.0;
+    x_a = 0.0, y_a = 0.0, yaw_a = 0.0;
     z1 = 0.3, z2 = 0.2;
     r1 = 0.25, r2 = 0.35;
  // 初始化last_t
