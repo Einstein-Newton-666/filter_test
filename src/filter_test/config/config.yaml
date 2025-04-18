@@ -36,3 +36,37 @@
       lost_time_thres: 0.3
 
       tracking_thres: 1
+
+/armor_simulation:
+  ros__parameters:
+    # 基础参数
+    publish_rate: 15
+    
+    # 运动限制
+    linear_limit: 3.5
+    angle_limit: -1.
+    linear_speed_limit: 1.2
+    angle_speed_limit: 10.0
+    
+    # 加速度
+    linear_acceleration: 0.2
+    angular_acceleration: 0.3927  # π/8
+    
+    # 初始状态
+    initial_state:
+      x: 2.5
+      y: -1.8
+      yaw: 0.1
+      x_velocity: 0.
+      y_velocity: -0.
+      yaw_velocity: 6.0
+      x_acceleration: 0.
+      y_acceleration: 0.
+      yaw_acceleration: 0.
+    
+    # 几何参数
+    geometry:
+      z1: 0.32
+      z2: 0.18
+      r1: 0.28
+      r2: 0.38

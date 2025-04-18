@@ -2,23 +2,53 @@
 
 ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options) 
 : Node("armor_simulation", options) {
-    // 参数声明
-    publish_rate = 10;
-    linear_limit = 3, angle_limit = M_PI * 2; // 位姿和角度限制
-    linear_speed_limit = 1.0, angle_speed_limit = 8.0; // 线速度和角速度限制
-    linear_acc = 0.1, angle_acc = M_PI_4 /2; // 线角速度和角加速度
+    // // 参数声明
+    // publish_rate = 10;
+    // linear_limit = 3, angle_limit = M_PI * 2; // 位姿和角度限制
+    // linear_speed_limit = 1.0, angle_speed_limit = 8.0; // 线速度和角速度限制
+    // linear_acc = 0.1, angle_acc = M_PI_4 /2; // 线角速度和角加速度
     
-    //设置初值
-    x = 2;
-    y = -2;
-    yaw = 0;
-    x_v = 0.; 
-    y_v = -0.;
-    yaw_v = 5.0;
-    x_a = 0.0, y_a = 0.0, yaw_a = 0.0;
-    z1 = 0.3, z2 = 0.2;
-    r1 = 0.25, r2 = 0.35;
- // 初始化last_t
+    // //设置初值
+    // x = 2;
+    // y = -2;
+    // yaw = 0;
+    // x_v = 0.; 
+    // y_v = -0.;
+    // yaw_v = 5.0;
+    // x_a = 0.0, y_a = 0.0, yaw_a = 0.0;
+    // z1 = 0.3, z2 = 0.2;
+    // r1 = 0.25, r2 = 0.35;
+
+    publish_rate = this->declare_parameter<int>("publish_rate", 10);
+    linear_limit = this->declare_parameter<double>("linear_limit", 3.0);
+    angle_limit = this->declare_parameter<double>("angle_limit", 2 * M_PI);
+
+    // 运动限制
+    linear_speed_limit = this->declare_parameter<double>("linear_speed_limit", 1.0);
+    angle_speed_limit = this->declare_parameter<double>("angle_speed_limit", 8.0);
+
+    // 加速度参数
+    linear_acc = this->declare_parameter<double>("linear_acceleration", 0.1);
+    angle_acc = this->declare_parameter<double>("angular_acceleration", M_PI_4 / 2.0);
+    
+    // 初始状态
+    x = this->declare_parameter<double>("initial_state.x", 2.0);
+    y = this->declare_parameter<double>("initial_state.y", -2.0);
+    yaw = this->declare_parameter<double>("initial_state.yaw", 0.0);
+    x_v = this->declare_parameter<double>("initial_state.x_velocity", 0.0);
+    y_v = this->declare_parameter<double>("initial_state.y_velocity", 0.0);
+    yaw_v = this->declare_parameter<double>("initial_state.yaw_velocity", 5.0);
+    x_a = this->declare_parameter<double>("initial_state.x_acceleration", 0.0);
+    y_a = this->declare_parameter<double>("initial_state.y_acceleration", 0.0);
+    yaw_a = this->declare_parameter<double>("initial_state.yaw_acceleration", 0.0);
+    
+    // 几何参数
+    z1 = this->declare_parameter<double>("geometry.z1", 0.3);
+    z2 = this->declare_parameter<double>("geometry.z2", 0.2);
+    r1 = this->declare_parameter<double>("geometry.r1", 0.25);
+    r2 = this->declare_parameter<double>("geometry.r2", 0.35);
+
+    // 初始化last_t
     last_t = this->now();
     position_marker_.ns = "position_";
     position_marker_.type = visualization_msgs::msg::Marker::SPHERE;
@@ -134,18 +164,25 @@ void ArmorSimulation::publishSimulation() {
 
     
     //整车模型运动控制
-    if(abs(x) > linear_limit){
-        x_a += (x_v > 0 ? -1 : 1) * 0.1;
-    }
-    if(abs(y) > linear_limit){
-        y_a += (y_v > 0 ? -1 : 1) * 0.1;
-    }
-    if(abs(yaw_v) > angle_speed_limit){
-        yaw_a += (yaw_v > 0 ? -1 : 1) * 0.5;
-    }
-    // if(abs(x) > linear_limit) x_a = - x / abs(x) * linear_acc;    
-    // if(abs(y) > linear_limit) y_a = - y / abs(y) * linear_acc;    
-    if(abs(yaw) > angle_limit) yaw = 0;    
+    // if(abs(x) > linear_limit){
+    //     x_a += (x_v > 0 ? -1 : 1) * 0.1;
+    // }
+    // if(abs(y) > linear_limit){
+    //     y_a += (y_v > 0 ? -1 : 1) * 0.1;
+    // }
+    // if(abs(yaw_v) > angle_speed_limit){
+    //     yaw_a += (yaw_v > 0 ? -1 : 1) * 0.5;
+    // }
+    
+    //角速度限制
+    if((abs(x_v) > linear_speed_limit) && linear_speed_limit != -1) { x_v = linear_speed_limit;}
+    if((abs(y_v) > linear_speed_limit) && linear_speed_limit != -1) { y_v = linear_speed_limit;}   
+    if((abs(yaw_v) > angle_speed_limit) && angle_speed_limit != -1) { yaw_v = angle_speed_limit;}    
+    //位置过大时开始刹车并反向运动
+    if((abs(x) > linear_limit) && linear_limit != -1) { x_a = - x / abs(x) * linear_acc;}
+    if((abs(y) > linear_limit) && linear_limit != -1) { y_a = - y / abs(y) * linear_acc;}   
+    if((abs(yaw) > angle_limit) && angle_limit != -1) { yaw_a = - yaw / abs(x) * angle_acc;}    
+    // if(abs(yaw) > angle_limit) yaw = 0;    
 
   }
 

@@ -18,7 +18,7 @@ def generate_launch_description():
         executable='armor_simulation',
         name='armor_simulation',
         output='screen',
-        # parameters=[params_file],
+        parameters=[node_params],
     )
 
     tracker_node = Node(
