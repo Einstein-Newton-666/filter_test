@@ -1,0 +1,45 @@
+/armor_tracker:
+  ros__parameters:
+    s2qxy_: 0.5
+    s2qz_: 0.5
+    s2qyaw_: 0.5
+    s2qr_: 10.0
+
+    r_pose_: 0.0001
+    r_distance_: 0.0001
+    r_yaw_: 0.0001
+    init_r: 0.25
+
+/armor_simulation:
+  ros__parameters:
+    # 基础参数
+    publish_rate: 15
+    
+    # 运动限制
+    linear_limit: 3.5
+    angle_limit: -10.
+    linear_speed_limit: 1.2
+    angle_speed_limit: 10.0
+    
+    # 加速度
+    linear_acceleration: 0.2
+    angular_acceleration: 0.3927  # π/8
+    
+    # 初始状态
+    initial_state:
+      x: 2.5
+      y: -1.8
+      yaw: 0.1
+      x_velocity: 0.
+      y_velocity: -0.
+      yaw_velocity: 6.0
+      x_acceleration: 0.
+      y_acceleration: 0.
+      yaw_acceleration: 0.1
+    
+    # 几何参数
+    geometry:
+      z1: 0.32
+      z2: 0.18
+      r1: 0.28
+      r2: 0.38
