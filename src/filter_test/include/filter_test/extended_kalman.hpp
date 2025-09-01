@@ -10,14 +10,6 @@
 #define _std_radian(angle) ((angle) + round((0 - (angle)) / (2 * M_PI)) * (2 * M_PI))
 #endif
 
-
-template<typename T>
-void ceres_xyz_to_ypd(const T& xyz, T& ypd) {
-    ypd[0] = ceres::atan2(xyz[1], xyz[0]); // yaw
-    ypd[1] = ceres::atan2(xyz[2], ceres::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1])); // pitch
-    ypd[2] = ceres::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]); // distance
-};
-
 //修改自交哥的滤波器，主要改动为将滤波器的大小修改为动态大小，但速度可能会下降QWQ
 class ExtendedKalmanFilter
 {

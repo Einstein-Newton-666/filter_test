@@ -1,5 +1,8 @@
 #include "filter_test/filter.hpp"
 
+//1 ekf 0 ukf
+#define FILTER 0
+
 // EKF
 // xa = x_armor, xc = x_robot_center
 // state: xc, v_xc, yc, v_yc, za1, za2, orient, v_yaw, r1, r2
@@ -143,7 +146,12 @@ void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
         armors_msg->armors[index].pose.position.y - init_r * sin(yaw), 0,
         armors_msg->armors[index].pose.position.z, armors_msg->armors[index].pose.position.z,
         yaw, 0, init_r, init_r;
+
+#ifdef FILTER
     ekf.init(x);
+#else
+    ukf.init(x);
+#endif
 
     last_time_ = armors_msg->header.stamp;
     last_yaw = yaw;
@@ -151,7 +159,13 @@ void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
 }
 
 Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
-    if(armors_msg->armors.empty()){return ekf.getState();}
+    if(armors_msg->armors.empty()){
+#ifdef FILTER
+        return ekf.getState();
+#else
+        return ukf.getState();
+#endif
+    }
     int armor_number = armors_msg->armors.size();
     // if(armor_number == 2 && last_armor_number == 1) {last_yaw += M_PI_2; std::cout<<" s "<<std::endl;}
     last_armor_number = armor_number;
@@ -161,7 +175,12 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
     last_time_ = time_now;
 
     Eigen::VectorXd x(10) ;
+#ifdef FILTER
     x = ekf.predict(Predict(dt)).x_pri;
+#else
+    x = ukf.predict(Predict(dt));
+#endif
+    
     //获取滤波器中匹配的装甲板的索引 
     //TODO:更高效的匹配和筛选方法，可以参考西工大代码https://github.com/SnocrashWang/WMJAimer/tree/master
     // std::vector<int> index(armors_msg->armors.size());
@@ -277,15 +296,27 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
     switch (index.size())
     {
     case 2:
+#ifdef FILTER        
         ekf.update(MeasureDouble(index[0], index[1]), Predict(dt), z_pyd, get_q(dt), get_r(z_pyd));
+#else        
+        ukf.update(MeasureDouble(index[0], index[1]), Predict(dt), z_pyd, get_q(dt), get_r(z_pyd));
+#endif
+
         break;
     
     default:
+#ifdef FILTER
         ekf.update(MeasureSingle(index[0]), Predict(dt), z_pyd, get_q(dt), get_r(z_pyd));
+#else
+        ukf.update(MeasureSingle(index[0]), Predict(dt), z_pyd, get_q(dt), get_r(z_pyd));
+#endif
         break;
     }
-
+#ifdef FILTER
     x = ekf.getState();
+#else
+    x = ukf.getState();
+#endif
     last_yaw = x[6];
     return x;
 }

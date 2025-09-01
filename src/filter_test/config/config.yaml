@@ -1,8 +1,8 @@
 /armor_tracker:
   ros__parameters:
-    s2qxy_: 0.5
-    s2qz_: 0.5
-    s2qyaw_: 0.5
+    s2qxy_: 0.05
+    s2qz_: 0.05
+    s2qyaw_: 0.05
     s2qr_: 10.0
 
     r_pose_: 0.0001
@@ -19,7 +19,7 @@
     linear_limit: 3.5
     angle_limit: -10.
     linear_speed_limit: 1.2
-    angle_speed_limit: 10.0
+    angle_speed_limit: 5.0
     
     # 加速度
     linear_acceleration: 0.2
@@ -30,11 +30,11 @@
       x: 2.5
       y: -1.8
       yaw: 0.1
-      x_velocity: 0.
-      y_velocity: -0.
+      x_velocity: 0.1
+      y_velocity: -0.1
       yaw_velocity: 6.0
-      x_acceleration: 0.
-      y_acceleration: 0.
+      x_acceleration: 0.1
+      y_acceleration: 0.1
       yaw_acceleration: 0.1
     
     # 几何参数

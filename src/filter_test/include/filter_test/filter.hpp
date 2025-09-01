@@ -9,6 +9,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "filter_test/extended_kalman.hpp"
+#include "filter_test/unscented_kalman.hpp"
 #include <auto_aim_interfaces/msg/armors.hpp>
 #include <auto_aim_interfaces/msg/armor.hpp>
 
@@ -30,6 +31,7 @@ private:
     Eigen::MatrixXd get_r(Eigen::VectorXd & z);
 
     ExtendedKalmanFilter ekf;
+    UnscentedKalmanFilter ukf;
 
     double init_r;
     int last_armor_number;

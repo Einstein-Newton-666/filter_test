@@ -68,3 +68,9 @@ inline double get_closest_angle(const double& cur, const double& tar) {
     return tar + delta; // tar + cur - tar
 }
 
+template<typename T>
+inline void ceres_xyz_to_ypd(const T& xyz, T& ypd) {
+    ypd[0] = ceres::atan2(xyz[1], xyz[0]); // yaw
+    ypd[1] = ceres::atan2(xyz[2], ceres::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1])); // pitch
+    ypd[2] = ceres::sqrt(xyz[0] * xyz[0] + xyz[1] * xyz[1] + xyz[2] * xyz[2]); // distance
+};
