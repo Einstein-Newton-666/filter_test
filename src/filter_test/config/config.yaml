@@ -20,21 +20,22 @@
     angle_limit: -10.
     linear_speed_limit: 1.2
     angle_speed_limit: 10.0
+    angle_speed_limit: 10.0
     
     # 加速度
-    linear_acceleration: 0.4
-    angular_acceleration: 0.7854  # π/4
+    linear_acceleration: 0.
+    angular_acceleration: 0.3924  # π/8
 
     # 初始状态
     initial_state:
       x: 2.5
       y: -1.8
       yaw: 0.1
-      x_velocity: 0.1
-      y_velocity: -0.1
+      x_velocity: 0.
+      y_velocity: -0.
       yaw_velocity: 6.0
-      x_acceleration: 0.1
-      y_acceleration: 0.1
+      x_acceleration: 0.
+      y_acceleration: 0.
       yaw_acceleration: 0.1
     
     # 几何参数
