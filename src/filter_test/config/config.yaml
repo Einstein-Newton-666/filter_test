@@ -19,12 +19,12 @@
     linear_limit: 3.5
     angle_limit: -10.
     linear_speed_limit: 1.2
-    angle_speed_limit: 5.0
+    angle_speed_limit: 10.0
     
     # 加速度
-    linear_acceleration: 0.2
-    angular_acceleration: 0.3927  # π/8
-    
+    linear_acceleration: 0.4
+    angular_acceleration: 0.7854  # π/4
+
     # 初始状态
     initial_state:
       x: 2.5

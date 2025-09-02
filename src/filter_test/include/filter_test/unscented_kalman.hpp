@@ -11,6 +11,7 @@ public:
     UnscentedKalmanFilter(): x_e(Eigen::VectorXd::Zero(0)), P_mat(Eigen::MatrixXd::Identity(0,0) * INF) {}
     explicit UnscentedKalmanFilter(const Eigen::VectorXd& x): x_e(x) {}
 
+    // 初始化状态和协方差
     void init(const Eigen::VectorXd& x0) {
         this->x_e = x0;
         this->P_mat = Eigen::MatrixXd::Identity(x0.size(), x0.size());
@@ -20,9 +21,9 @@ public:
     Eigen::VectorXd getState() const { return this->x_e; }
 
     struct UKFParams {
-        double alpha = 1e-3;
-        double beta = 2.0;
-        double kappa = 0.0;
+        double alpha = 1e-3; // 控制sigma点分布的参数
+        double beta = 2.0;   // 先验分布的参数（高斯时取2）
+        double kappa = 0.0;  // 次要缩放参数
     };
 
     // 只预测不更新协方差
@@ -34,12 +35,16 @@ public:
         double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
         double n_lambda = n + lambda;
         if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
+        // 生成sigma点
         Eigen::MatrixXd sigma_points = computeSigmaPoints(x_e, P_mat, lambda, n);
+        // sigma点传播
         Eigen::MatrixXd propagated_sigma = propagateSigmaPoints(sigma_points, f);
+        // 权重计算
         std::vector<double> wm(2 * n + 1, 0.5 / n_lambda);
         std::vector<double> wc(2 * n + 1, 0.5 / n_lambda);
         wm[0] = lambda / n_lambda;
         wc[0] = lambda / n_lambda + (1 - params.alpha * params.alpha + params.beta);
+        // 先验状态均值
         Eigen::VectorXd x_pri = Eigen::VectorXd::Zero(n);
         for (int i = 0; i < 2 * n + 1; ++i) {
             x_pri += wm[i] * propagated_sigma.col(i);
@@ -60,16 +65,21 @@ public:
         double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
         double n_lambda = n + lambda;
         if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
+        // 生成sigma点
         Eigen::MatrixXd sigma_points = computeSigmaPoints(x_e, P_mat, lambda, n);
+        // sigma点传播
         Eigen::MatrixXd propagated_sigma = propagateSigmaPoints(sigma_points, f);
+        // 权重计算
         std::vector<double> wm(2 * n + 1, 0.5 / n_lambda);
         std::vector<double> wc(2 * n + 1, 0.5 / n_lambda);
         wm[0] = lambda / n_lambda;
         wc[0] = lambda / n_lambda + (1 - params.alpha * params.alpha + params.beta);
+        // 先验状态均值
         Eigen::VectorXd x_pri = Eigen::VectorXd::Zero(n);
         for (int i = 0; i < 2 * n + 1; ++i) {
             x_pri += wm[i] * propagated_sigma.col(i);
         }
+        // 先验协方差
         Eigen::MatrixXd P_pri = Q;
         for (int i = 0; i < 2 * n + 1; ++i) {
             Eigen::VectorXd diff = propagated_sigma.col(i) - x_pri;
@@ -87,12 +97,16 @@ public:
         double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
         double n_lambda = n + lambda;
         if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
+        // 生成sigma点
         Eigen::MatrixXd sigma_points = computeSigmaPoints(x_e, P_mat, lambda, n);
+        // sigma点传播
         Eigen::MatrixXd z_sigma = propagateSigmaPoints(sigma_points, h);
+        // 权重计算
         std::vector<double> wm(2 * n + 1, 0.5 / n_lambda);
         std::vector<double> wc(2 * n + 1, 0.5 / n_lambda);
         wm[0] = lambda / n_lambda;
         wc[0] = lambda / n_lambda + (1 - params.alpha * params.alpha + params.beta);
+        // 先验观测均值
         Eigen::VectorXd z_pri = Eigen::VectorXd::Zero(m);
         for (int i = 0; i < 2 * n + 1; ++i) {
             z_pri += wm[i] * z_sigma.col(i);
@@ -111,16 +125,21 @@ public:
         double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
         double n_lambda = n + lambda;
         if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
+        // 生成sigma点
         Eigen::MatrixXd sigma_points = computeSigmaPoints(x_e, P_mat, lambda, n);
+        // sigma点传播
         Eigen::MatrixXd z_sigma = propagateSigmaPoints(sigma_points, h);
+        // 权重计算
         std::vector<double> wm(2 * n + 1, 0.5 / n_lambda);
         std::vector<double> wc(2 * n + 1, 0.5 / n_lambda);
         wm[0] = lambda / n_lambda;
         wc[0] = lambda / n_lambda + (1 - params.alpha * params.alpha + params.beta);
+        // 先验观测均值
         Eigen::VectorXd z_pri = Eigen::VectorXd::Zero(m);
         for (int i = 0; i < 2 * n + 1; ++i) {
             z_pri += wm[i] * z_sigma.col(i);
         }
+        // 观测协方差和交叉协方差
         Eigen::MatrixXd S = R;
         Eigen::MatrixXd Tc = Eigen::MatrixXd::Zero(n, m);
         for (int i = 0; i < 2 * n + 1; ++i) {
@@ -129,7 +148,9 @@ public:
             S += wc[i] * dz * dz.transpose();
             Tc += wc[i] * dx * dz.transpose();
         }
+        // 卡尔曼增益
         Eigen::MatrixXd K = Tc * S.inverse();
+        // 状态和协方差更新
         x_e = x_e + K * (z - z_pri);
         P_mat = P_mat - K * S * K.transpose();
     }
@@ -156,7 +177,7 @@ private:
     // 生成sigma点
     Eigen::MatrixXd computeSigmaPoints(const Eigen::VectorXd& x, const Eigen::MatrixXd& P, double lambda, int n) {
         Eigen::MatrixXd sigma_points(n, 2 * n + 1);
-        Eigen::MatrixXd A = P.llt().matrixL();
+        Eigen::MatrixXd A = P.llt().matrixL(); // Cholesky分解
         sigma_points.col(0) = x;
         double scale = sqrt(n + lambda);
         for (int i = 0; i < n; ++i) {

@@ -176,19 +176,24 @@ void ArmorSimulation::publishSimulation() {
     // }
     
     //角速度限制
-    if((abs(x_v) > linear_speed_limit) && linear_speed_limit != -1) { x_v = x_v / abs(x_v) * linear_speed_limit;}
-    if((abs(y_v) > linear_speed_limit) && linear_speed_limit != -1) { y_v = y_v / abs(y_v) * linear_speed_limit;}   
-    if((abs(yaw_v) > angle_speed_limit) && angle_speed_limit != -1) { yaw_v = yaw_v / abs(yaw_v) * angle_speed_limit;}    
+    constexpr double eps = 1e-6;  // 防止除零
+    if((abs(x_v) > linear_speed_limit) && linear_speed_limit != -1) { x_v = x_v / (abs(x_v) + eps) * linear_speed_limit;}
+    if((abs(y_v) > linear_speed_limit) && linear_speed_limit != -1) { y_v = y_v / (abs(y_v) + eps) * linear_speed_limit;}   
+    if((abs(yaw_v) > angle_speed_limit) && angle_speed_limit != -1) { yaw_v = yaw_v / (abs(yaw_v) + eps) * angle_speed_limit;}    
     //位置过大时开始刹车并反向运动
-    if((abs(x) > linear_limit) && linear_limit != -1) { x_a = - x / abs(x) * linear_acc;}
-    if((abs(y) > linear_limit) && linear_limit != -1) { y_a = - y / abs(y) * linear_acc;}   
-    if((abs(yaw) > angle_limit) && angle_limit != -1) { yaw_a = - yaw / abs(x) * angle_acc;}    
+    if((abs(x) > linear_limit) && linear_limit != -1) { x_a = - x / (abs(x) + eps) * linear_acc;}
+    if((abs(y) > linear_limit) && linear_limit != -1) { y_a = - y / (abs(y) + eps) * linear_acc;}   
+    if((abs(yaw) > angle_limit) && angle_limit != -1) { yaw_a = - yaw / (abs(yaw) + eps) * angle_acc;}    
     // if(abs(last_v_yaw - yaw_v) > 1){
     //   RCLCPP_ERROR_STREAM(this->get_logger(), "error" + std::to_string(dt));
     // }
     // if(abs(yaw) > angle_limit) yaw = 0;    
     last_v_yaw = yaw_v;
 
+    // dt异常监控
+    if (dt > 0.2) {
+        RCLCPP_WARN(this->get_logger(), "dt过大: %f", dt);
+    }
   }
 
 int main(int argc, char * argv[]){
