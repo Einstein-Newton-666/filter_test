@@ -1,14 +1,43 @@
-/armor_tracker:
+/filter:
   ros__parameters:
-    s2qxy_: 0.05
-    s2qz_: 0.05
-    s2qyaw_: 0.05
-    s2qr_: 10.0
+    # 数据源选择
+    use_simulation: true   # true=模拟器（固定R），false=检测器（距离相关R）
 
-    r_pose_: 0.0001
-    r_distance_: 0.0001
-    r_yaw_: 0.0001
+    # CV模型过程噪声参数
+    s2qxy_cv: 0.1
+    s2qz_cv: 0.1
+    s2qyaw_cv: 0.1
+    s2qr_cv: 10.0
+    s2qdz_cv: 0.1
+
+    # Singer模型过程噪声参数
+    s2qxy_singer: 0.05
+    s2qz_singer: 0.05
+    s2qyaw_singer: 0.01
+    s2qr_singer: 5.0
+    s2qdz_singer: 0.01
+    tau_singer: 2.0
+
+    # UKF参数
+    ukf_alpha: 0.01
+    ukf_beta: 2.0
+    ukf_kappa: 0.0
+
+    # 仿真模式R参数（固定R，无PnP误差）
+    r_pose_sim: 0.001
+    r_distance_sim: 0.001
+    r_yaw_sim: 0.001
+
+    # 检测器模式R参数（距离相关R，有PnP误差）
+    r_pose_det: 0.01
+    r_distance_det: 0.01
+    r_yaw_det: 0.01
+
     init_r: 0.25
+    
+    # 滤波器选择参数
+    use_ekf: false
+    use_cv_model: false
 
 /armor_simulation:
   ros__parameters:
@@ -20,10 +49,9 @@
     angle_limit: -10.
     linear_speed_limit: 1.2
     angle_speed_limit: 10.0
-    angle_speed_limit: 10.0
     
     # 加速度
-    linear_acceleration: 0.
+    linear_acceleration: 0.2
     angular_acceleration: 0.3924  # π/8
 
     # 初始状态
@@ -31,8 +59,8 @@
       x: 2.5
       y: -1.8
       yaw: 0.1
-      x_velocity: 0.
-      y_velocity: -0.
+      x_velocity: 0.5
+      y_velocity: -0.5
       yaw_velocity: 6.0
       x_acceleration: 0.
       y_acceleration: 0.

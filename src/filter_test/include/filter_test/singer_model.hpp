@@ -14,7 +14,7 @@ namespace singer_model {
  *                    y, vy, ay,   // 位置、速度、加速度（Y轴）
  *                    z, vz, az,   // 位置、速度、加速度（Z轴）
  *                    yaw, vyaw, ayaw,  // 偏航角、角速度、角加速度
- *                    r1, r2]      // 装甲板半径（常值）
+ *                    r1, r2, dz]   // 装甲板半径和高度差（常值）
  */
 struct Predict {
 public:
@@ -47,11 +47,12 @@ public:
         x_cur[10] = x_pre[10] + x_pre[11] * tau * (1 - exp_term);
         x_cur[11] = x_pre[11] * exp_term;
         
-        // r1, r2 常值
+        // r1, r2, dz 常值
         x_cur[12] = x_pre[12];
         x_cur[13] = x_pre[13];
+        x_cur[14] = x_pre[14];
     }
-    int size = 14; // 状态维度
+    int size = 15; // 状态维度
 private:
     double dt = 0.;   // 时间间隔
     double tau = 1.;  // 机动时间常数
@@ -64,11 +65,12 @@ public:
     template<typename T>
     void operator()(const T& x, T& z) const {
         // 计算装甲板在世界坐标系下的位置
-        // x[9] 是 super 板的 yaw
+        // x[9] 是 super 板的 yaw, x[14] 是 dz（两块装甲板的高度差）
+        // 装甲板位置：z = x[6] + I % 2 * dz (装甲板0用x[6]，装甲板1用x[6] + dz)
         const T xyz_armor = { 
-            x[0] + ceres::cos(x[9] + M_PI_2 * I) * x[12 + I % 2],
-            x[3] + ceres::sin(x[9] + M_PI_2 * I) * x[12 + I % 2],
-            x[6 + I % 2] 
+            x[0] - ceres::cos(x[9] + M_PI_2 * I) * x[12 + I % 2],
+            x[3] - ceres::sin(x[9] + M_PI_2 * I) * x[12 + I % 2],
+            I % 2 == 0 ? x[6] : x[6] + x[14]
         };
 
         // 观测量：yaw, pitch, distance, yaw(orient)
@@ -77,7 +79,7 @@ public:
         z[2] = ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1] + xyz_armor[2] * xyz_armor[2]); // distance
         z[3] = x[9] + M_PI_2 * I;
     }
-    int input_size = 14;   // 状态维度
+    int input_size = 15;   // 状态维度
     int output_size = 4;   // 观测维度
     int I; // 匹配到的装甲板索引
 private:
@@ -91,10 +93,12 @@ public:
     void operator()(const T& x, T& z) const {
         int idx = 0;
         for (const auto &k : {I, J}) {
+            // x[9] 是 super 板的 yaw, x[14] 是 dz（两块装甲板的高度差）
+            // 装甲板位置：z = x[6] + k % 2 * dz (装甲板0用x[6]，装甲板1用x[6] + dz)
             T xyz_armor = { 
-                x[0] + ceres::cos(x[9] + M_PI_2 * k) * x[12 + k % 2],
-                x[3] + ceres::sin(x[9] + M_PI_2 * k) * x[12 + k % 2],
-                x[6 + k % 2] 
+                x[0] - ceres::cos(x[9] + M_PI_2 * k) * x[12 + k % 2],
+                x[3] - ceres::sin(x[9] + M_PI_2 * k) * x[12 + k % 2],
+                k % 2 == 0 ? x[6] : x[6] + x[14]
             };
             
             z[idx + 0] = ceres::atan2(xyz_armor[1], xyz_armor[0]); // yaw
@@ -104,14 +108,14 @@ public:
             idx += 4;
         }
     }
-    int input_size = 14;   // 状态维度
+    int input_size = 15;   // 状态维度
     int output_size = 8;   // 观测维度
     int I, J; // 匹配到的装甲板索引
 private:
 };
 
-inline Eigen::MatrixXd predict_q(double dt, double s2qxyz, double s2qyaw, double s2qr) {
-    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(14, 14);
+inline Eigen::MatrixXd predict_q(double dt, double s2qxy, double s2qz, double s2qyaw, double s2qr, double s2qdz, double tau) {
+    Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(15, 15);
 
     auto fill_block = [&](int idx, double sigma_a2, double tau) {
         const double alpha = 1.0 / tau;  // 机动频率
@@ -153,23 +157,42 @@ inline Eigen::MatrixXd predict_q(double dt, double s2qxyz, double s2qyaw, double
     };
 
     // x, y, z
-    fill_block(0, s2qxyz, 1.0);
-    fill_block(3, s2qxyz, 1.0);
-    fill_block(6, s2qxyz, 1.0);
+    fill_block(0, s2qxy, tau);
+    fill_block(3, s2qxy, tau);
+    fill_block(6, s2qz, tau);
     // yaw
-    fill_block(9, s2qyaw, 1.0);
+    fill_block(9, s2qyaw, tau);
 
-    // r1, r2 常值噪声
-    Q(12,12) = s2qr * dt;
-    Q(13,13) = s2qr * dt;
+    // r1, r2, dz 常值噪声
+    Q(12,12) = s2qr * pow(dt, 4) / 4;
+    Q(13,13) = s2qr * pow(dt, 4) / 4;
+    Q(14,14) = s2qdz * pow(dt, 4) / 4;
 
     return Q;
 }
 
-inline Eigen::MatrixXd measure_r(Eigen::VectorXd & z, double r_pose, double r_distance, double r_yaw) {
+inline Eigen::MatrixXd measure_r(
+    Eigen::VectorXd& z,
+    double r_pose,
+    double r_distance,
+    double r_yaw,
+    const std::vector<double>& abs_yaws = std::vector<double>{0.0},
+    bool use_fixed_r = false) noexcept
+{
     Eigen::VectorXd r(z.size());
     for(int i = 0; i < (z.size() / 4); i++){
-        r.segment(i * 4, 4) << r_pose, r_pose, r_distance * std::abs(z[i * 4 + 2]), r_yaw;
+        double abs_yaw = (abs_yaws.size() > i) ? abs_yaws[i] : 0.0;
+        double d2r = abs_yaw * M_PI / 180.0;
+        if (use_fixed_r) {
+            // 固定R模式：仿真数据无PnP误差
+            r.segment(i * 4, 4) << r_pose, r_pose, r_distance, r_yaw;
+        } else {
+            // 距离相关R模式：检测器数据有PnP误差
+            r.segment(i * 4, 4) << r_pose, 
+                                    r_pose, 
+                                    r_distance * pow(z[i * 4 + 2], 2) * (pow(abs(d2r), 2) + 1), 
+                                    log(abs(d2r) + 1) * 0.01 + r_yaw;
+        }
     }
     return r.asDiagonal();
 }

@@ -2,13 +2,7 @@
 
 #include <Eigen/Dense>
 #include <ceres/jet.h>
-
 #include "common.hpp"
-
-// 将弧度约束在[-pi, pi]范围内
-#ifndef _std_radian
-#define _std_radian(angle) ((angle) + round((0 - (angle)) / (2 * M_PI)) * (2 * M_PI))
-#endif
 
 //修改自交哥的滤波器，主要改动为将滤波器的大小修改为动态大小，但速度可能会下降QWQ
 class ExtendedKalmanFilter
@@ -19,18 +13,18 @@ public:
 
     void init(const Eigen::VectorXd& x0) {
         this->x_e = x0;
-        this->P_mat = Eigen::MatrixXd::Identity(x0.size(), x0.size());
+        this->P_mat = Eigen::MatrixXd::Identity(x0.size(), x0.size());//较大的P矩阵，可以增加状态的不确定性，加快收敛速度
     }// 初始化且方差为单位矩阵
 
-    void setState(const Eigen::VectorXd & x0) {this->x_e = x0;}
-    Eigen::MatrixXd getState() const {return this->x_e;}
+    void setState(const Eigen::VectorXd& x0) {this->x_e = x0;}
+    Eigen::VectorXd getState() const {return this->x_e;}
 
     struct PredictResult {
         Eigen::VectorXd x_pri;
         Eigen::MatrixXd F;
     };
 
-    // 只预测不更新协方差
+    // 只预测不修改协方差和状态空间
     template<class PredictFunc>
     PredictResult predict(PredictFunc&& f){
         this->x_e.resize(f.size);
@@ -56,7 +50,7 @@ public:
         return PredictResult{x_pri, F};
     }
     
-    // 预测并更新协方差
+    // 预测并修改协方差和状态空间
     template<class PredictFunc>
     void predict_forward(PredictFunc&& f, const Eigen::MatrixXd& Q){
         PredictResult predict_result = this->predict(f);
@@ -70,6 +64,7 @@ public:
         Eigen::MatrixXd H;
     };
 
+    // 更新但不修改协方差和状态空间
     template<class MeasureFunc>
     MeasureResult measure(MeasureFunc&& h){
         std::vector<ceres::Jet<double,Eigen::Dynamic>> x_e_jet(h.input_size);
@@ -94,36 +89,16 @@ public:
         return MeasureResult{z_pri, H};
     }
 
+    // 更新并修改协方差和状态空间
     template<class MeasureFunc>
-    void update_forward(MeasureFunc&& h,const Eigen::VectorXd & z,const Eigen::MatrixXd& R){
-        MeasureResult measure_result = this->measure(h);
+    void update_forward(MeasureFunc&& h, const Eigen::VectorXd& z, const Eigen::MatrixXd& R){
+        MeasureResult meas_result = this->measure(h);
         this->x_e.resize(h.input_size);
         this->P_mat.resize(h.input_size, h.input_size);
-        Eigen::MatrixXd K = P_mat * measure_result.H.transpose() * (measure_result.H * P_mat * measure_result.H.transpose() + R).inverse();
-        Eigen::VectorXd innovation = z - measure_result.z_pri;
-        this->x_e = this->x_e + K * innovation;
-        this->P_mat = (Eigen::MatrixXd::Identity(h.input_size, h.input_size) - K * measure_result.H) * this->P_mat;
+        Eigen::MatrixXd K = P_mat * meas_result.H.transpose() * (meas_result.H * P_mat * meas_result.H.transpose() + R).inverse();
+        this->x_e = this->x_e + K * (z - meas_result.z_pri);
+        this->P_mat = (Eigen::MatrixXd::Identity(h.input_size, h.input_size) - K * meas_result.H) * this->P_mat;
     }
-
-    template<class MeasureFunc, class PredictFunc>
-    void update(
-        MeasureFunc&& measure_func,
-        PredictFunc&& predict_func,
-        const Eigen::VectorXd& z, 
-        const Eigen::MatrixXd& Q, 
-        const Eigen::MatrixXd& R
-    ) {
-        this->predict_forward(predict_func, Q);
-        MeasureResult measure_result = this->measure(measure_func);
-        Eigen::VectorXd observation = z;
-        for(int i = 0; i < z.size() / 4; i++){
-            observation[i * 4] = get_closest_angle(observation[i * 4 + 0], measure_result.z_pri[i * 4 + 0]);
-            observation[i * 4 + 3] = get_closest_angle(observation[i * 4 + 3], measure_result.z_pri[i * 4 + 3]);
-        }
-
-        this->update_forward(measure_func, observation, R);
-    }
-
 
 private:
     Eigen::VectorXd x_e; // 估计状态变量

@@ -5,11 +5,19 @@
 #include "common.hpp"
 
 // 无迹卡尔曼滤波器（Unscented Kalman Filter, UKF）实现
+// 参考: Wan, E. A., & Van Der Merwe, R. (2000). The unscented Kalman filter.
 class UnscentedKalmanFilter
 {
 public:
     UnscentedKalmanFilter(): x_e(Eigen::VectorXd::Zero(0)), P_mat(Eigen::MatrixXd::Identity(0,0) * INF) {}
-    explicit UnscentedKalmanFilter(const Eigen::VectorXd& x): x_e(x) {}
+    explicit UnscentedKalmanFilter(const Eigen::VectorXd& x): x_e(x), alpha_(1e-2), beta_(2.0), kappa_(0.0) {}
+
+    // 设置UKF参数
+    void setParams(double alpha = 1e-2, double beta = 2.0, double kappa = 0.0) {
+        alpha_ = alpha;
+        beta_ = beta;
+        kappa_ = kappa;
+    }
 
     // 初始化状态和协方差
     // 初始化状态和协方差
@@ -21,24 +29,12 @@ public:
     void setState(const Eigen::VectorXd& x0) { this->x_e = x0; }
     Eigen::VectorXd getState() const { return this->x_e; }
 
-    struct UKFParams {
-        double alpha = 1e-3; // 控制sigma点分布的参数
-        double beta = 2.0;   // 先验分布的参数（高斯时取2）
-        double kappa = 0.0;  // 次要缩放参数
-        double alpha = 1e-3; // 控制sigma点分布的参数
-        double beta = 2.0;   // 先验分布的参数（高斯时取2）
-        double kappa = 0.0;  // 次要缩放参数
-    };
-
-    // 只预测不更新协方差
+    // 只预测不更新协方差（仅用于获取先验估计，不修改内部状态）
     template<class PredictFunc>
-    Eigen::VectorXd predict(PredictFunc&& f, const UKFParams& params = UKFParams()) {
+    Eigen::VectorXd predict(PredictFunc&& f) {
         int n = f.size;
-        this->x_e.resize(n);
-        this->P_mat.conservativeResize(n, n);
-        double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
+        double lambda = alpha_ * alpha_ * (n + kappa_) - n;
         double n_lambda = n + lambda;
-        if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
         // 生成sigma点
         // 生成sigma点
         Eigen::MatrixXd sigma_points = computeSigmaPoints(x_e, P_mat, lambda, n);
@@ -46,7 +42,7 @@ public:
         Eigen::MatrixXd propagated_sigma = propagateSigmaPoints(sigma_points, f, n);
         // 权重计算
         double wm0 = lambda / n_lambda;
-        double wc0 = wm0 + (1 - params.alpha*params.alpha + params.beta);
+        double wc0 = wm0 + (1 - alpha_*alpha_ + beta_);
         double wi = 0.5 / n_lambda;
 
         Eigen::VectorXd wm = Eigen::VectorXd::Constant(2*n+1, wi);
@@ -68,11 +64,9 @@ public:
 
     // 预测并更新协方差
     template<class PredictFunc>
-    void predict_forward(PredictFunc&& f, const Eigen::MatrixXd& Q, const UKFParams& params = UKFParams()) {
+    void predict_forward(PredictFunc&& f, const Eigen::MatrixXd& Q) {
         int n = f.size;
-        this->x_e.resize(n);
-        this->P_mat.conservativeResize(n, n);
-        double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
+        double lambda = alpha_ * alpha_ * (n + kappa_) - n;
         double n_lambda = n + lambda;
         if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
         // 生成sigma点
@@ -82,7 +76,7 @@ public:
         Eigen::MatrixXd propagated_sigma = propagateSigmaPoints(sigma_points, f, n);
         // 权重计算
         double wm0 = lambda / n_lambda;
-        double wc0 = wm0 + (1 - params.alpha*params.alpha + params.beta);
+        double wc0 = wm0 + (1 - alpha_*alpha_ + beta_);
         double wi = 0.5 / n_lambda;
 
         Eigen::VectorXd wm = Eigen::VectorXd::Constant(2*n+1, wi);
@@ -108,10 +102,10 @@ public:
 
  
     template<class MeasureFunc>
-    Eigen::VectorXd measure(MeasureFunc&& h, const UKFParams& params = UKFParams()) {
+    Eigen::VectorXd measure(MeasureFunc&& h) {
         int n = x_e.size();
         int m = h.output_size;
-        double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
+        double lambda = alpha_ * alpha_ * (n + kappa_) - n;
         double n_lambda = n + lambda;
         if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
         // 生成sigma点
@@ -121,7 +115,7 @@ public:
         Eigen::MatrixXd z_sigma = propagateSigmaPoints(sigma_points, h, m);
         // 权重计算
         double wm0 = lambda / n_lambda;
-        double wc0 = wm0 + (1 - params.alpha*params.alpha + params.beta);
+        double wc0 = wm0 + (1 - alpha_*alpha_ + beta_);
         double wi = 0.5 / n_lambda;
 
         Eigen::VectorXd wm = Eigen::VectorXd::Constant(2*n+1, wi);
@@ -137,17 +131,16 @@ public:
         // 直接返回先验观测
         return z_pri;
     }
-
+    
 
     template<class MeasureFunc>
-    void update_forward(MeasureFunc&& h, const Eigen::VectorXd& z, const Eigen::MatrixXd& R, const UKFParams& params = UKFParams()) {
+    void update_forward(MeasureFunc&& h, const Eigen::VectorXd& z, const Eigen::MatrixXd& R) {
         int n = h.input_size; // 观测方程输入维度
         int m = h.output_size; // 观测方程输出维度
         if (x_e.size() != n) x_e.resize(n);
         if (P_mat.rows() != n || P_mat.cols() != n) P_mat.conservativeResize(n, n);
-        double lambda = params.alpha * params.alpha * (n + params.kappa) - n;
+        double lambda = alpha_ * alpha_ * (n + kappa_) - n;
         double n_lambda = n + lambda;
-        if (n_lambda <= 0) throw std::runtime_error("UKF: n + lambda must be positive!");
         // 生成sigma点
         // 生成sigma点
         Eigen::MatrixXd sigma_points = computeSigmaPoints(x_e, P_mat, lambda, n);
@@ -155,7 +148,7 @@ public:
         Eigen::MatrixXd z_sigma = propagateSigmaPoints(sigma_points, h, m);
         // 权重计算
         double wm0 = lambda / n_lambda;
-        double wc0 = wm0 + (1 - params.alpha*params.alpha + params.beta);
+        double wc0 = wm0 + (1 - alpha_*alpha_ + beta_);
         double wi = 0.5 / n_lambda;
 
         Eigen::VectorXd wm = Eigen::VectorXd::Constant(2*n+1, wi);
@@ -186,29 +179,19 @@ public:
         P_mat = P_mat - K * S * K.transpose();
     }
 
-
-    template<class MeasureFunc, class PredictFunc>
-    void update(
-        MeasureFunc&& measure_func,
-        PredictFunc&& predict_func,
-        const Eigen::VectorXd& z,
-        const Eigen::MatrixXd& Q,
-        const Eigen::MatrixXd& R,
-        const UKFParams& params = UKFParams()
-    ) {
-        this->predict_forward(predict_func, Q, params);
-        this->update_forward(measure_func, z, R, params);
-    }
-
 private:
     Eigen::VectorXd x_e; // 估计状态变量
     Eigen::MatrixXd P_mat; // 估计状态协方差矩阵
     static constexpr double INF = 1e9;
 
+    // UKF参数
+    double alpha_ = 1e-2; // 控制sigma点分布的参数
+    double beta_ = 2.0;   // 先验分布的参数（高斯时取2）
+    double kappa_ = 0.0;  // 次要缩放参数
+
     // 生成sigma点
     Eigen::MatrixXd computeSigmaPoints(const Eigen::VectorXd& x, const Eigen::MatrixXd& P, double lambda, int n) {
         Eigen::MatrixXd sigma_points(n, 2 * n + 1);
-        Eigen::MatrixXd A = P.llt().matrixL(); // Cholesky分解
         Eigen::MatrixXd A = P.llt().matrixL(); // Cholesky分解
         sigma_points.col(0) = x;
         double scale = sqrt(n + lambda);

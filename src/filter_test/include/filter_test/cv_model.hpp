@@ -5,7 +5,7 @@
 namespace cv_model {
     // EKF
 // xa = x_armor, xc = x_robot_center
-// state: xc, v_xc, yc, v_yc, za1, za2, orient, v_yaw, r1, r2
+// state: xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1, r2, dz
 // index: 0,  1,    2,  3,    4,   5,   6,      7,     8,   9,
 // - yaw 需要在切换时 set?
 // - 对于只有单独半径的装甲板， 不更新多余的 r 和 z
@@ -22,16 +22,17 @@ public:
         x_cur[1] = x_pre[1];
         x_cur[2] = x_pre[2] + this->delta_t * x_pre[3];
         x_cur[3] = x_pre[3];
-        x_cur[4] = x_pre[4];
+        x_cur[4] = x_pre[4] + this->delta_t * x_pre[5];
         x_cur[5] = x_pre[5];
         x_cur[6] = x_pre[6] + this->delta_t * x_pre[7];
         x_cur[7] = x_pre[7];
         x_cur[8] = x_pre[8];
         x_cur[9] = x_pre[9];
+        x_cur[10] = x_pre[10];
     }
     
-    //状态向量的大小
-    int size = 10;
+    //状态向量的大小: [xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1, r2, dz]
+    int size = 11;
 
 private:
     double delta_t = 0.;
@@ -43,29 +44,41 @@ public:
     // z: 当前需求比较的装甲板，rotate: super_yaw 到需求装甲的 rotate
     // ekf 之与测量转观测量
     // 用装甲板进行更新J
+    // 状态: [xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1, r2, dz]
     explicit MeasureSingle(const int i): I(i) {}
     template<typename T>
     void operator()(const T& x, T& z) const {
-        // x[6] 是 super 板的 yaw
+        // x[6] 是 super 板的 yaw, x[10] 是 dz（两块装甲板的高度差）
+        // 装甲板位置：z = x[4] + I % 2 * x[10] (装甲板0用x[4]，装甲板1用x[4] + dz)
         const T xyz_armor = { 
-            x[0] + ceres::cos(x[6] + M_PI_2 * I) * x[8 + I % 2],
-            x[2] + ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
-            x[4 + I % 2] 
+            x[0] - ceres::cos(x[6] + M_PI_2 * I) * x[8 + I % 2],
+            x[2] - ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
+            ((I % 2 == 0) ? x[4] : (x[4] + x[10]))
         };
-        // T ypd(3);  //这里T的类型是自定义类型的容器
-        // ceres_xyz_to_ypd(xyz_armor, ypd);
-        // for (int i = 0; i < 3; i++) {
-        //     z[i] = ypd[i];
+        // T xyz_armor;
+        // if(I % 2 == 0){
+        //     xyz_armor = {
+        //         x[0] - ceres::cos(x[6] + M_PI_2 * I) * x[8 + I % 2],
+        //         x[2] - ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
+        //         x[4]
+        //     };
+        // }else{
+        //     xyz_armor = {
+        //         x[0] - ceres::cos(x[6] + M_PI_2 * I) * x[8 + I % 2],
+        //         x[2] - ceres::sin(x[6] + M_PI_2 * I) * x[8 + I % 2],
+        //         x[4] + x[10]
+        //     };
         // }
         z[0] = ceres::atan2(xyz_armor[1], xyz_armor[0]); // yaw
         z[1] = ceres::atan2(xyz_armor[2], ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1])); // pitch
         z[2] = ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1] + xyz_armor[2] * xyz_armor[2]); // distance
+
         // orien_yaw = orien_yaw
         z[3] = x[6] + M_PI_2 * I;
     }
 
-    //状态向量的大小
-    int input_size = 10;
+    //状态向量的大小: [xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1, r2, dz]
+    int input_size = 11;
     //观测向量的大小
     int output_size = 4;
     //I 匹配到的装甲板的索引
@@ -81,34 +94,45 @@ public:
     // z: 当前需求比较的装甲板，rotate: super_yaw 到需求装甲的 rotate
     // ekf 之与测量转观测量
     // 用装甲板进行更新J
+    // 状态: [xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1, r2, dz]
     explicit MeasureDouble(int i, int j): I(i), J(j) {}
     template<typename T>
     void operator()(const T& x, T& z) const {
         int idx = 0;
-        for (const auto &i : {I, J})
+        for (const auto &k : {I, J})
         {
-            // x[6] 是 super 板的 yaw
+            // x[6] 是 super 板的 yaw, x[10] 是 dz（两块装甲板的高度差）
+            // 装甲板位置：z = x[4] + k % 2 * x[10] (装甲板0用x[4]，装甲板1用x[4] + dz)
             T xyz_armor = { 
-                x[0] + ceres::cos(x[6] + M_PI_2 * i) * x[8 + i % 2],
-                x[2] + ceres::sin(x[6] + M_PI_2 * i) * x[8 + i % 2],
-                x[4 + i % 2] 
+                x[0] - ceres::cos(x[6] + M_PI_2 * k) * x[8 + k % 2],
+                x[2] - ceres::sin(x[6] + M_PI_2 * k) * x[8 + k % 2],
+                ((k % 2 == 0) ? x[4] : (x[4] + x[10]))
             };
-            // T ypd(3);
-            // ceres_xyz_to_ypd(xyz_armor, ypd);
-            // for (int j = 0; j < 3; j++) {
-            //     z[idx + j] = ypd[j];
+            // T xyz_armor;
+            // if(k % 2 == 0){
+            //     xyz_armor = {
+            //         x[0] - ceres::cos(x[6] + M_PI_2 * k) * x[8 + k % 2],
+            //         x[2] - ceres::sin(x[6] + M_PI_2 * k) * x[8 + k % 2],
+            //         x[4]
+            //     };
+            //  }else{
+            //     xyz_armor = {
+            //         x[0] - ceres::cos(x[6] + M_PI_2 * k) * x[8 + k % 2],
+            //         x[2] - ceres::sin(x[6] + M_PI_2 * k) * x[8 + k % 2],
+            //         x[4] + x[10]
+            //     };
             // }
             z[idx + 0] = ceres::atan2(xyz_armor[1], xyz_armor[0]); // yaw
             z[idx + 1] = ceres::atan2(xyz_armor[2], ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1])); // pitch
             z[idx + 2] = ceres::sqrt(xyz_armor[0] * xyz_armor[0] + xyz_armor[1] * xyz_armor[1] + xyz_armor[2] * xyz_armor[2]); // distance
             // orien_yaw = orien_yaw
-            z[idx + 3] = x[6] + M_PI_2 * i;
+            z[idx + 3] = x[6] + M_PI_2 * k;
             idx += 4;
         }
     }
     
-    //状态向量的大小
-    int input_size = 10;
+    //状态向量的大小: [xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1, r2, dz]
+    int input_size = 11;
     //观测向量的大小
     int output_size = 8;
     // I J 匹配到的装甲板的索引
@@ -117,32 +141,47 @@ public:
 private:
 };
 
-Eigen::MatrixXd predict_q(double dt_, double s2qxyz_, double s2qyaw_, double s2qr_){
-    Eigen::MatrixXd q(10, 10);
-    double t = dt_, x = s2qxyz_, y = s2qyaw_, r = s2qr_;
+Eigen::MatrixXd predict_q(double dt_, double s2qxy_, double s2qz_, double s2qyaw_, double s2qr_, double s2qdz_){
+    Eigen::MatrixXd q(11, 11);
+    double t = dt_, x = s2qxy_, z = s2qz_, y = s2qyaw_, r = s2qr_, dz = s2qdz_;
     double q_x_x = pow(t, 4) / 4 * x, q_x_vx = pow(t, 3) / 2 * x, q_vx_vx = pow(t, 2) * x;
-    double q_y_y = pow(t, 4) / 4 * y, q_y_vy = pow(t, 3) / 2 * x, q_vy_vy = pow(t, 2) * y;
+    double q_y_y = pow(t, 4) / 4 * y, q_y_vy = pow(t, 3) / 2 * y, q_vy_vy = pow(t, 2) * y;
+    double q_z_z = pow(t, 4) / 4 * z, q_z_vz = pow(t, 3) / 2 * z, q_vz_vz = pow(t, 2) * z;
     double q_r = pow(t, 4) / 4 * r;
+    double q_dz = pow(t, 4) / 4 * dz;
     // clang-format off
-    //    xc      v_xc    yc      v_yc    za1     za2     yaw     v_yaw   r1      r2
-    q <<  q_x_x,  q_x_vx, 0,      0,      0,      0,      0,      0,      0,      0,
-          q_x_vx, q_vx_vx,0,      0,      0,      0,      0,      0,      0,      0,
-          0,      0,      q_x_x,  q_x_vx, 0,      0,      0,      0,      0,      0,
-          0,      0,      q_x_vx, q_vx_vx,0,      0,      0,      0,      0,      0,
-          0,      0,      0,      0,      s2qxyz_,  0,      0,      0,      0,      0,
-          0,      0,      0,      0,      0,      s2qxyz_,  0,      0,      0,      0,
-          0,      0,      0,      0,      0,      0,      q_y_y,  q_y_vy, 0,      0,
-          0,      0,      0,      0,      0,      0,      q_y_vy, q_vy_vy,0,      0,
-          0,      0,      0,      0,      0,      0,      0,      0,      q_r,    0,
-          0,      0,      0,      0,      0,      0,      0,      0,      0,      q_r;
-    // clang-format on
+    //    xc      v_xc    yc      v_yc    za      v_za    yaw     v_yaw   r1      r2      dz
+    q <<  q_x_x,  q_x_vx, 0,      0,      0,      0,      0,      0,      0,      0,      0,
+          q_x_vx, q_vx_vx,0,      0,      0,      0,      0,      0,      0,      0,      0,
+          0,      0,      q_x_x,  q_x_vx, 0,      0,      0,      0,      0,      0,      0,
+          0,      0,      q_x_vx, q_vx_vx,0,      0,      0,      0,      0,      0,      0,
+          0,      0,      0,      0,      q_z_z,  q_z_vz, 0,      0,      0,      0,      0,
+          0,      0,      0,      0,      q_z_vz, q_vz_vz,0,      0,      0,      0,      0,
+          0,      0,      0,      0,      0,      0,      q_y_y,  q_y_vy, 0,      0,      0,
+          0,      0,      0,      0,      0,      0,      q_y_vy, q_vy_vy,0,      0,      0,
+          0,      0,      0,      0,      0,      0,      0,      0,      q_r,    0,      0,
+          0,      0,      0,      0,      0,      0,      0,      0,      0,      q_r,    0,
+          0,      0,      0,      0,      0,      0,      0,      0,      0,      0,      q_dz;
+    // clang-format on      
     return q;
 };
 
-Eigen::MatrixXd measure_r(Eigen::VectorXd & z, double r_pose, double r_distance, double r_yaw){
+Eigen::MatrixXd measure_r(Eigen::VectorXd & z, double r_pose, double r_distance, double r_yaw, 
+                          const std::vector<double> & abs_yaws = std::vector<double>{0.0},
+                          bool use_fixed_r = false){
     Eigen::VectorXd r(z.size());
     for(int i = 0; i < (z.size() / 4); i++){
-        r.segment(i *4 , 4) << r_pose, r_pose, abs(r_distance * z[i * 4 + 2]), r_yaw;
+        double abs_yaw = (abs_yaws.size() > i) ? abs_yaws[i] : 0.0;
+        if (use_fixed_r) {
+            // 固定R模式：仿真数据无PnP误差
+            r.segment(i * 4, 4) << r_pose, r_pose, r_distance, r_yaw;
+        } else {
+            // 距离相关R模式：检测器数据有PnP误差
+            r.segment(i * 4, 4) << r_pose, 
+                                    r_pose, 
+                                    r_distance * pow(z[i * 4 + 2], 2) * (pow(abs(abs_yaw * M_PI / 180.0), 2) + 1), 
+                                    log(abs(abs_yaw * M_PI / 180.0)) * 0.01 + r_yaw;
+        }
     }
     return r.asDiagonal();
 };
