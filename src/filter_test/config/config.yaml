@@ -39,36 +39,48 @@
     use_ekf: false
     use_cv_model: false
 
-/armor_simulation:
+/graph_optimizer_test:
   ros__parameters:
-    # 基础参数
-    publish_rate: 15
-    
-    # 运动限制
-    linear_limit: 3.5
-    angle_limit: -10.
-    linear_speed_limit: 1.2
-    angle_speed_limit: 10.0
-    
-    # 加速度
-    linear_acceleration: 0.2
-    angular_acceleration: 0.3924  # π/8
+    # 观测模式选择
+    use_2d_observation: true  # true=两级像素观测(多装甲板)，false=YPD几何观测
 
-    # 初始状态
-    initial_state:
-      x: 2.5
-      y: -1.8
-      yaw: 0.1
-      x_velocity: 0.5
-      y_velocity: -0.5
-      yaw_velocity: 6.0
-      x_acceleration: 0.
-      y_acceleration: 0.
-      yaw_acceleration: 0.1
-    
-    # 几何参数
-    geometry:
-      z1: 0.32
-      z2: 0.18
-      r1: 0.28
-      r2: 0.38
+    # CV模型过程噪声参数
+    s2qxy: 0.1
+    s2qz: 0.1
+    s2qyaw: 0.1
+    s2qr: 10.0
+    s2qdz: 0.1
+
+    # 仿真模式R参数
+    r_pose: 0.001
+    r_distance: 0.001
+    r_yaw: 0.001
+
+    # 像素噪声（用于2D观测模式）
+    pixel_noise_std: 1.0
+
+    # 冷启动帧数 (2D观测模式)
+    cold_start_frames: 3
+
+    # 几何约束噪声 [tangential, radial, z, yaw]
+    geo_tangential: 0.01
+    geo_radial: 0.03
+    geo_height: 0.01
+    geo_yaw: 0.005
+
+    # 相机内参 (外参从 TF 树 odom→camera_optical_frame 动态获取)
+    camera_fx: 2411.0
+    camera_fy: 2411.0
+    camera_cx: 720.0
+    camera_cy: 640.0
+
+    # 畸变系数
+    distortion_k1: -0.093
+    distortion_k2: 0.154
+    distortion_p1: 0.0001
+    distortion_p2: -0.0006
+    use_distortion: true
+
+/gimbal_simulation:
+  ros__parameters:
+    use_ground_truth_tracking: true

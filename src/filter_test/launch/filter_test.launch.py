@@ -1,34 +1,71 @@
 import os
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch_ros.actions import ComposableNodeContainer
-from launch_ros.descriptions import ComposableNode
 from launch_ros.actions import Node
-from launch.substitutions import EnvironmentVariable
-from launch.actions import TimerAction
+from launch.actions import DeclareLaunchArgument
 
 def generate_launch_description():
-    node_params = os.path.join(
+    # 配置文件路径
+    filter_test_config = os.path.join(
         get_package_share_directory('filter_test'), 'config', 'config.yaml')
+    simulation_config = os.path.join(
+        get_package_share_directory('armor_simulation'), 'config', 'simulation_config.yaml')
 
-    filter_test_node = Node(
+    # 启动参数
+    use_graph_optimizer = DeclareLaunchArgument(
+        'use_graph_optimizer',
+        default_value='true',
+        description='Whether to use graph optimizer instead of EKF/UKF')
+
+    # 仿真器 (运动 + 相机投影 + 噪声 + PnP, 相机外参从 TF 获取)
+    armor_simulation_node = Node(
+        package='armor_simulation',
+        executable='armor_simulation_node',
+        name='armor_simulation_node',
+        output='screen',
+        parameters=[simulation_config],
+    )
+
+    # 云台仿真 (S-curve 动力学 + TF 广播 + 反馈)
+    gimbal_simulation_node = Node(
+        package='armor_simulation',
+        executable='gimbal_simulation',
+        name='gimbal_simulation',
+        output='screen',
+        parameters=[filter_test_config],
+    )
+
+    # 角度解算器 placeholder (简单几何, 未来扩展 MPC)
+    angle_solver_node = Node(
+        package='armor_simulation',
+        executable='angle_solver',
+        name='angle_solver',
+        output='screen',
+    )
+
+    # 传统滤波器
+    filter_node = Node(
         package='filter_test',
         executable='filter',
         name='filter',
         output='screen',
-        parameters=[node_params],
+        parameters=[filter_test_config],
     )
 
-    armor_simulation_node = Node(
+    # 图优化器 (发布 /tracker/target 给 angle_solver)
+    graph_optimizer_node = Node(
         package='filter_test',
-        executable='armor_simulation',
-        name='armor_simulation',
+        executable='graph_optimizer_test',
+        name='graph_optimizer_test',
         output='screen',
-        parameters=[node_params],
+        parameters=[filter_test_config],
     )
 
     return LaunchDescription([
-        filter_test_node,
-        armor_simulation_node
-        ])
+        use_graph_optimizer,
+        armor_simulation_node,
+        gimbal_simulation_node,
+        angle_solver_node,
+        filter_node,
+        graph_optimizer_node,
+    ])

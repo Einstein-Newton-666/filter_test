@@ -1,6 +1,6 @@
 #include "filter_test/filter.hpp"
-#include "filter_test/cv_model.hpp"
-#include "filter_test/singer_model.hpp"
+#include "filter_test/filters/cv_model.hpp"
+#include "filter_test/filters/singer_model.hpp"
 
 ArmorFilter::ArmorFilter(bool use_ekf, bool use_cv_model,
     double s2qxy_cv, double s2qz_cv, double s2qyaw_cv, double s2qr_cv, double s2qdz_cv,

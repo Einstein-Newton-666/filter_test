@@ -2,7 +2,7 @@
 
 #include <Eigen/Dense>
 #include <ceres/jet.h>
-#include "common.hpp"
+#include "../common.hpp"
 
 //修改自交哥的滤波器，主要改动为将滤波器的大小修改为动态大小，但速度可能会下降QWQ
 class ExtendedKalmanFilter
