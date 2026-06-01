@@ -83,6 +83,10 @@ private:
     double s2qr_ = 10.0;
     double s2qdz_ = 0.1;
 
+    // 速度平滑噪声 (2D观测模式)
+    double s2qvel_ = 0.1;
+    double s2qvyaw_ = 0.1;
+
     // 观测噪声 (YPD)
     double r_pose_ = 0.01;
     double r_distance_ = 0.01;
@@ -207,6 +211,34 @@ struct ArmorCVMeasureYPD : auto_graph::MeasureModel<ArmorCVMeasureYPD, 11, 4> {
         z[1] = ceres::atan2(armor_z, ceres::sqrt(armor_x * armor_x + armor_y * armor_y));  // pitch
         z[2] = ceres::sqrt(armor_x * armor_x + armor_y * armor_y + armor_z * armor_z);  // distance
         z[3] = x[6] + (zero + M_PI_2 * I);  // orient_yaw
+    }
+};
+
+// YPD 双板观测: 同时预测两块装甲板的 YPD (8D 观测, 参照 cv_model::MeasureDouble)
+struct ArmorCVMeasureYPDDouble : auto_graph::MeasureModel<ArmorCVMeasureYPDDouble, 11, 8> {
+    int I, J;
+
+    ArmorCVMeasureYPDDouble(int i, int j) : I(i), J(j) {}
+
+    template<typename T>
+    void operator()(const std::vector<T>& x, std::vector<T>& z) const {
+        int idx = 0;
+        for (int k : {I, J}) {
+            T zero = x[6] * T(0);
+            T angle = x[6] + T(M_PI_2 * k);
+            T cos_angle = ceres::cos(angle);
+            T sin_angle = ceres::sin(angle);
+            T r = x[8 + k % 2];
+            T armor_x = x[0] - cos_angle * r;
+            T armor_y = x[2] - sin_angle * r;
+            T armor_z = x[4] + (k % 2 == 0 ? zero : x[10]);
+
+            z[idx + 0] = ceres::atan2(armor_y, armor_x);  // yaw
+            z[idx + 1] = ceres::atan2(armor_z, ceres::sqrt(armor_x * armor_x + armor_y * armor_y));  // pitch
+            z[idx + 2] = ceres::sqrt(armor_x * armor_x + armor_y * armor_y + armor_z * armor_z);  // distance
+            z[idx + 3] = x[6] + (zero + M_PI_2 * k);  // orient_yaw
+            idx += 4;
+        }
     }
 };
 

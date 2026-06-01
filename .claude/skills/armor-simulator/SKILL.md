@@ -59,12 +59,15 @@ area                                    # 像素面积 (px²)
 
 每帧 `publishSimulation()` 的步骤:
 
-1. **过程噪声** — CWNA 模型: `a_rand = sqrt(q/dt) * N(0,1)`, 运动更新 `pos+=v*dt+0.5*a*dt²`, `v+=a*dt`
-2. **TF 查询** — `lookupTransform(odom, camera_optical_frame, now, 100ms)` → 更新相机外参
-3. **遍历 4 块装甲板**:
-   - 3D 位姿: `armor_yaw = yaw + i*π/2`, `pos = center - r*(cos,sin)`, pitch=0.26(15°内倾)
+1. **过程噪声** — CWNA 模型: `a_rand = sqrt(q/dt) * N(0,1)`, `ax_eff = x_a + ax_noise`
+2. **径向距离约束** — 超界时直接反向加速度，和 linear_limit 一致: 若 `r > max` → `x_a = -x/|x| * linear_acc` (指向原点刹车); 若 `r < min` → `x_a = +x/|x| * linear_acc` (背离原点); 共用 `linear_acceleration` 参数
+3. **运动更新** — `pos+=v*dt+0.5*a*dt²`, `v+=a*dt`
+4. **TF 查询** — `lookupTransform(odom, camera_optical_frame, now, 100ms)` → 更新相机外参
+5. **遍历 4 块装甲板**:
+   - 3D 位姿: `armor_yaw = yaw + i*π/2`, `pos = center + r*(cos,sin)`, `pitch = -15°`
    - 过滤链: 朝向 → 检测概率 → 4角点投影+可见性 → 像素噪声 → PnP
-4. **发布** — `/detector/armors` + `/ground_truth` + `/simulation/marker`
+6. **Marker 管理** — 每帧先 DELETE 全部 obs marker (ID 0-3)，再 ADD 可见装甲板 (lifetime 0.1s) → 掉检即时消失
+7. **发布** — `/detector/armors` + `/ground_truth` + `/simulation/marker`
 
 ## 核心接口
 
@@ -166,6 +169,12 @@ Odom: X→前 Y→左 Z→上      Camera: X→右 Y→下 Z→前
   ros__parameters:
     publish_rate: 15
     process_noise_xy: 0.1; process_noise_yaw: 0.5     # CWNA 过程噪声
+
+    # 径向距离约束
+    radial_min: 3.0; radial_max: 7.0                  # 最近/最远可检测距离 (m)
+    linear_acceleration: 0.2                           # 边界刹车加速度 (m/s²)
+    linear_speed_limit: 1.2                            # 线速度限幅 (m/s)
+
     initial_state: {x:0.0, y:-5.0, yaw:0.1, x_velocity:0.0, y_velocity:-0.8, yaw_velocity:6.0}
     geometry: {z1:0.0, z2:0.15, r1:0.28, r2:0.38}
     camera_fx: 2411.0; camera_fy: 2411.0               # 内参

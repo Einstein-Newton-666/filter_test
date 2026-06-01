@@ -18,9 +18,11 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <sensor_msgs/msg/image.hpp>
 
 #include <auto_aim_interfaces/msg/armors.hpp>
 #include <auto_aim_interfaces/msg/armor.hpp>
+#include <auto_aim_interfaces/msg/send_data.hpp>
 #include <armor_simulation/msg/ground_truth.hpp>
 
 #include "armor_simulation/camera_model.hpp"
@@ -66,6 +68,23 @@ private:
   rclcpp::Publisher<auto_aim_interfaces::msg::Armors>::SharedPtr detector_pub_;
   rclcpp::Publisher<armor_simulation::msg::GroundTruth>::SharedPtr ground_truth_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+  rclcpp::Publisher<auto_aim_interfaces::msg::SendData>::SharedPtr gimbal_pub_;
+  bool publish_image_ = false;
+  bool publish_gimbal_gt_ = false;
+  int image_width_ = 1920;
+  int image_height_ = 1440;
+  double cx_ = 720.0;
+  double cy_ = 640.0;
+
+  // ── 图像显示选项 ──
+  struct ImageDisplay {
+      bool ground_truth = true;   // 绿色真值投影
+      bool noisy        = true;   // 红色带噪检测
+      bool labels       = true;   // 装甲板索引标签
+      bool crosshair    = true;   // 画面中心十字线
+      double resize_scale = 1.0;  // 发布前缩放比例 (0.5=一半)
+  } img_disp_;
 
   // ── 定时器 ──
   rclcpp::TimerBase::SharedPtr timer_;
@@ -77,6 +96,7 @@ private:
   double linear_limit, angle_limit;
   double linear_speed_limit, angle_speed_limit;
   double process_noise_xy_, process_noise_yaw_;
+  double radial_min_ = 3.0, radial_max_ = 7.0;
   int noise_seed_;
 
   // ── 过程噪声 ──
@@ -84,8 +104,11 @@ private:
   std::normal_distribution<double> accel_noise_dist_;
 
   // ── 可视化 ──
-  visualization_msgs::msg::Marker position_marker_, armor_marker_;
+  visualization_msgs::msg::Marker position_marker_, gt_marker_, obs_marker_;
   visualization_msgs::msg::MarkerArray marker_array_;
+
+  // ── 仿真图像 (持久化缓冲区, 避免高频重分配) ──
+  cv::Mat sim_image_;
 };
 
 }  // namespace armor_sim

@@ -1,7 +1,7 @@
 /armor_simulation_node:
   ros__parameters:
     # 基础参数
-    publish_rate: 15               # 发布频率 (Hz)
+    publish_rate: 100               # 发布频率 (Hz), 真实检测帧率
 
     # 过程噪声 — CWNA 连续白噪声加速度模型
     # a_random = sqrt(q/dt) · N(0,1)
@@ -10,8 +10,12 @@
     process_noise_yaw: 0.1         # 小幅随机角加速度
     process_noise_seed: 42         # 随机种子
 
+    # ── 径向距离约束 ──
+    radial_min: 3.0                # 最近可检测距离 (m)
+    radial_max: 7.0                # 最远可检测距离 (m)
+
     # 运动限制
-    linear_limit: 3.5              # 位置限幅 (m), -1=不限
+    linear_limit: -1.0             # 关 (用 radial_min/max 替代)
     angle_limit: -10.0             # 角度限幅 (rad), 负值=不限
     linear_speed_limit: 1.2        # 线速度限幅 (m/s)
     angle_speed_limit: 10.0        # 角速度限幅 (rad/s)
@@ -27,7 +31,7 @@
       x_velocity: 0.0
       y_velocity: -1.5             # 相机前方运动
       yaw_velocity: 2.0            # 中速旋转
-      x_acceleration: 0.0
+      x_acceleration: 0.5
       y_acceleration: 0.5          # 加速远离
       yaw_acceleration: 0.3        # 旋转加速
 
@@ -79,6 +83,18 @@
     detection_probability: 1.0     # 基础检测概率
     miss_probability: 0.0          # 基础漏检概率
     
+    # ── 图像发布 (调试/可视化) ──
+    publish_image: false           # 发布 /simulation/image 查看仿真画面
+    # 以下仅在 publish_image: true 时生效
+    image_show_ground_truth: true  # 绿色真值投影角点
+    image_show_noisy: true         # 红色带噪检测角点
+    image_show_labels: true        # 装甲板索引标签
+    image_show_crosshair: true     # 画面中心十字线
+    image_resize_scale: 0.5       # 发布前缩放比例 (0.5=长宽各一半, 带宽降4倍)
+
+    # ── 云台真值追踪 (发布 /send_pack 供 gimbal 直接跟踪) ──
+    publish_gimbal_gt: true        # 替代 tracker→angle_solver 闭环, 云台直指机器人
+
     # 通用
     noise_seed: 42                 # 噪声随机种子
     enemy_color: "blue"            # 敌方颜色

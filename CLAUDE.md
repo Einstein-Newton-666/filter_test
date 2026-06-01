@@ -4,33 +4,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-ROS2 C++项目，用于使用卡尔曼滤波和因子图优化进行实时装甲板跟踪。包含三个主要 package：
+ROS2 **Humble** C++17 项目 (GCC 11, Ubuntu 22.04)，用于使用卡尔曼滤波和因子图优化进行实时装甲板跟踪。包含三个主要 package：
 
 1. **armor_simulation**：独立仿真器包（3D 运动 + 相机投影 + 噪声 + PnP + 云台）
 2. **filter_test**：滤波器和图优化测试包（EKF/UKF + GTSAM 因子图优化）
 3. **auto_aim_interfaces**：装甲板消息接口定义
 
+**详细文档：**
+- `docs/auto_graph_optimizer_architecture.md` — 图优化框架架构与原理
+- `docs/auto_graph_optimizer_usage.md` — 图优化框架使用指南
+- `AGENTS.md` — 高信噪比精简摘要（给其他 AI agent 用）
+- `.claude/skills/armor-filter/SKILL.md` — 滤波器专项知识
+- `.claude/skills/armor-simulator/SKILL.md` — 仿真器专项知识
+
 ## 构建命令
 
 ```bash
+# 基础构建
 colcon build --packages-select armor_simulation filter_test auto_aim_interfaces
+
+# 构建并启用测试
 colcon build --packages-select armor_simulation filter_test --cmake-args -DBUILD_TESTING=ON
+
+# 运行测试（两个测试可执行文件）
 colcon test --packages-select filter_test
+colcon test-result --verbose      # 查看失败详情
+
+# 运行单个测试
+colcon test --packages-select filter_test --ctest-args -R "filter_test"
+colcon test --packages-select filter_test --ctest-args -R "test_auto_graph_optimizer"
+
+# 环境设置
 source install/setup.bash
-export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH  # GTSAM 4.3
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH  # GTSAM 4.3 装在 /usr/local/lib
 ```
+
+**测试入口：**
+- `src/filter_test/test/filter_test.cpp` — 滤波器单元测试
+- `src/filter_test/test/test_auto_graph_optimizer.cpp` — 图优化器测试（当前仅测试不依赖 GTSAM 的部分）
 
 ## 运行方式
 
 ```bash
-# 全启动 (仿真器 + 云台 + 滤波器 + 图优化器)
+# 全启动 (仿真器 + 云台 + 滤波器 + 图优化器 + angle_solver)
 ros2 launch filter_test filter_test.launch.py
 
 # 带参数
 ros2 launch filter_test filter_test.launch.py use_graph_optimizer:=true
 
+# 仅仿真器 (不含滤波器和图优化)
+ros2 launch armor_simulation simulation.launch.py
+
 # 单独节点
 ros2 run armor_simulation armor_simulation_node
+ros2 run armor_simulation gimbal_simulation
 ros2 run filter_test filter
 ros2 run filter_test graph_optimizer_test --ros-args -p use_2d_observation:=true
 ```
@@ -51,7 +78,6 @@ src/
 │   │   ├── armor_simulation.cpp   # 主仿真节点
 │   │   ├── gimbal_simulation.cpp  # 云台仿真 (S-curve + TF)
 │   │   ├── angle_solver.cpp       # 角度解算器
-│   │   └── camera_simulator.cpp   # 2D 相机仿真器
 │   ├── config/                    # 仿真参数
 │   └── msg/GroundTruth.msg        # 真值消息
 │
@@ -137,6 +163,8 @@ opt.solve();
 
 **Singer 模型 (15D)**: `[x, vx, ax, y, vy, ay, z, vz, az, yaw, vyaw, ayaw, r1, r2, dz]`
 
+> ⚠️ 这些索引在 `cv_model.hpp`、`singer_model.hpp`、`graph_optimizer.hpp::VariableLayout` 等多个文件中被引用，修改需格外小心并全局搜索。
+
 ### ROS2 接口
 
 **订阅**:
@@ -149,36 +177,44 @@ opt.solve();
 - `/track_result` (Result): 滤波器跟踪结果
 - `/track_result/marker` (MarkerArray): RViz 可视化
 
-### 配置参数
+### 配置文件
 
-#### 图优化 (`config.yaml` - /graph_optimizer_test)
+> **原则：修改配置文件而非头文件默认值。**
+
+| 文件 | 控制节点 | 关键参数 |
+|------|---------|---------|
+| `src/filter_test/config/config.yaml` | `/filter`, `/graph_optimizer_test`, `/gimbal_simulation` | 滤波器选择、过程/观测噪声、相机内参、2D/YPD 模式 |
+| `src/armor_simulation/config/simulation_config.yaml` | `/armor_simulation_node` | 初始状态、运动噪声、径向距离约束、运动限幅、几何参数、像素噪声 U 形模型、离群点 |
+
+**图优化关键参数** (`config.yaml` - `/graph_optimizer_test`)：
 - `use_2d_observation`: 观测模式 (true=两级像素, false=YPD)
 - `cold_start_frames`: 冷启动帧数 (前 N 帧只累积不优化)
 - `s2qxy/s2qz/s2qyaw/s2qr/s2qdz`: 过程噪声
+- `s2qvel/s2qvyaw`: 速度平滑噪声 (2D 观测模式专用)
 - `r_pose/r_distance/r_yaw`: YPD 观测噪声
 - `pixel_noise_std`: 像素噪声 σ
 - `geo_tangential/radial/height/yaw`: 几何约束噪声
-- `camera_fx/fy/cx/cy`, `distortion_k1/k2/p1/p2`: 相机参数
-
-#### 云台 (`config.yaml` - /gimbal_simulation)
-- `use_ground_truth_tracking`: 真值追踪模式
-
-#### 仿真器 (`simulation_config.yaml`)
-- `initial_state`: 机器人初始位置/速度/加速度
-- `process_noise_xy/yaw`: 随机运动噪声
-- `geometry`: r1/r2/z1/z2 几何参数
-- `pixel_noise_*`, `detection_probability`, `use_outliers`
+- `camera_fx/fy/cx/cy`, `distortion_k1/k2/p1/p2`: 相机参数 (外参从 TF 动态获取)
 
 ## 依赖项
 
-- ROS2 (rclcpp, tf2, geometry_msgs, visualization_msgs)
+- ROS2 Humble (rclcpp, tf2, geometry_msgs, visualization_msgs)
 - Eigen3, OpenCV, Ceres Solver
-- GTSAM 4.3 (iSAM2, Cal3DS2, PinholeCamera)
+- GTSAM 4.3 (iSAM2, Cal3DS2, PinholeCamera) — 装在 `/usr/local/lib`
 - auto_aim_interfaces
+
+## 约定
+
+- 头文件布局：`include/<package>/...` → 以 `"<package>/..."` 引入
+- 所有 launch 文件中 exec 输出：`output='screen'`
+- 构建产物 (`build/`、`install/`、`log/`) 和 `.vscode/` 已被 git 忽略 — 不要提交
+- 没有 CI 工作流；验证方式 = `colcon test` + 手动 launch
+- `.vscode/c_cpp_properties.json` 硬编码了 `/opt/ros/humble` 路径，如果 ROS 发行版不同需修改
+- 当前 git 状态有未跟踪文件 (`AGENTS.md`, `docs/`, `.bak`) 和未提交修改
 
 ## 已知问题
 
-- r2 过冲 (缺少独立 VelocityFactor 速度正则化)
+- r2 过冲 (缺少独立 VelocityFactor 速度正则化；`s2qvel` 是部分替代方案)
 - yaw 为平坦标量 (无 SO(2) 角度包裹)
 - 匹配为启发式代价 (非马氏距离)
 - UKF 收敛速度比 EKF 慢

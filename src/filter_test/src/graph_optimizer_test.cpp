@@ -1,5 +1,6 @@
 #include "filter_test/graph_optimizer_test.hpp"
 #include "filter_test/auto_graph_optimizer/utils/helpers.hpp"
+#include "filter_test/common.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -19,6 +20,8 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     declare_parameter("s2qyaw", 0.1);
     declare_parameter("s2qr", 10.0);
     declare_parameter("s2qdz", 0.1);
+    declare_parameter("s2qvel", 0.1);
+    declare_parameter("s2qvyaw", 0.1);
     declare_parameter("r_pose", 0.01);
     declare_parameter("r_distance", 0.01);
     declare_parameter("r_yaw", 0.01);
@@ -41,6 +44,8 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     s2qyaw_ = get_parameter("s2qyaw").as_double();
     s2qr_ = get_parameter("s2qr").as_double();
     s2qdz_ = get_parameter("s2qdz").as_double();
+    s2qvel_ = get_parameter("s2qvel").as_double();
+    s2qvyaw_ = get_parameter("s2qvyaw").as_double();
     r_pose_ = get_parameter("r_pose").as_double();
     r_distance_ = get_parameter("r_distance").as_double();
     r_yaw_ = get_parameter("r_yaw").as_double();
@@ -132,19 +137,25 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
         // Per-group 运动模型: advanceFrame + addMotionFactor
         optimizer_->advanceFrame(dt);
 
-        // pos_vel: translation model (6D)
+        // pos_vel: translation model (6D), 位置用 s2qxy_/s2qz_, 速度用独立 s2qvel_
         Eigen::MatrixXd Qt = Eigen::MatrixXd::Zero(6, 6);
-        double q_xx_t = std::pow(dt, 4) / 4 * s2qxy_, q_xv_t = std::pow(dt, 3) / 2 * s2qxy_, q_vv_t = std::pow(dt, 2) * s2qxy_;
-        Qt(0, 0) = q_xx_t; Qt(0, 1) = q_xv_t; Qt(1, 0) = q_xv_t; Qt(1, 1) = q_vv_t;
-        Qt(2, 2) = q_xx_t; Qt(2, 3) = q_xv_t; Qt(3, 2) = q_xv_t; Qt(3, 3) = q_vv_t;
-        Qt(4, 4) = std::pow(dt, 4) / 4 * s2qz_; Qt(4, 5) = std::pow(dt, 3) / 2 * s2qz_;
-        Qt(5, 4) = Qt(4, 5); Qt(5, 5) = std::pow(dt, 2) * s2qz_;
+        double q_pp = std::pow(dt, 4) / 4 * s2qxy_;
+        double q_pv = std::pow(dt, 3) / 2 * s2qxy_;
+        double q_vv = std::pow(dt, 2) * s2qvel_;  // 独立速度噪声
+        Qt(0, 0) = q_pp; Qt(0, 1) = q_pv; Qt(1, 0) = q_pv; Qt(1, 1) = q_vv;
+        Qt(2, 2) = q_pp; Qt(2, 3) = q_pv; Qt(3, 2) = q_pv; Qt(3, 3) = q_vv;
+        double q_pp_z = std::pow(dt, 4) / 4 * s2qz_;
+        double q_pv_z = std::pow(dt, 3) / 2 * s2qz_;
+        Qt(4, 4) = q_pp_z; Qt(4, 5) = q_pv_z;
+        Qt(5, 4) = q_pv_z; Qt(5, 5) = std::pow(dt, 2) * s2qvel_;
         optimizer_->addMotionFactor<TranslationModel>("pos_vel", TranslationModel(dt), Qt);
 
-        // yaw_vyaw: yaw model (2D)
+        // yaw_vyaw: yaw model (2D), yaw噪声用 s2qyaw_, vyaw 用独立 s2qvyaw_
         Eigen::MatrixXd Qy = Eigen::MatrixXd::Zero(2, 2);
-        Qy(0, 0) = std::pow(dt, 4) / 4 * s2qyaw_; Qy(0, 1) = std::pow(dt, 3) / 2 * s2qyaw_;
-        Qy(1, 0) = Qy(0, 1); Qy(1, 1) = std::pow(dt, 2) * s2qyaw_;
+        Qy(0, 0) = std::pow(dt, 4) / 4 * s2qyaw_;
+        Qy(0, 1) = std::pow(dt, 3) / 2 * s2qyaw_;
+        Qy(1, 0) = Qy(0, 1);
+        Qy(1, 1) = std::pow(dt, 2) * s2qvyaw_;  // 独立 vyaw 噪声
         optimizer_->addMotionFactor<YawModel>("yaw_vyaw", YawModel(dt), Qy);
     } else {
         optimizer_->predict<ArmorCVMotionModel>(dt, Q);
@@ -153,22 +164,23 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
     // 构建观测 (匹配移到每个装甲板循环内)
     if (use_2d_observation_) {
         // ── 两级像素观测 (参考 jlu_vision_26) ──
-        // TF: camera→odom 变换 (用于几何约束)
+        // TF lookup("odom","camera") 返回 camera→odom 变换: p_odom = R_c2o * p_cam + t_c2o
         Eigen::Isometry3d T_camera_to_odom{Eigen::Isometry3d::Identity()};
-        // TF: odom→camera (用于计算 armor pose 在 camera 系的初值)
         Eigen::Isometry3d T_odom_to_camera{Eigen::Isometry3d::Identity()};
         try {
             auto tf = tf2_buffer_->lookupTransform(
                 "odom", "camera_optical_frame", current_time, rclcpp::Duration::from_seconds(0.1));
             Eigen::Quaterniond q(tf.transform.rotation.w, tf.transform.rotation.x,
                                 tf.transform.rotation.y, tf.transform.rotation.z);
-            Eigen::Matrix3d R_w2c = q.toRotationMatrix();
-            Eigen::Vector3d t_w2c(tf.transform.translation.x, tf.transform.translation.y,
+            Eigen::Matrix3d R_c2o = q.toRotationMatrix();
+            Eigen::Vector3d t_c2o(tf.transform.translation.x, tf.transform.translation.y,
                                   tf.transform.translation.z);
-            T_odom_to_camera = Eigen::Isometry3d::Identity();
-            T_odom_to_camera.rotate(R_w2c);
-            T_odom_to_camera.pretranslate(t_w2c);
-            T_camera_to_odom = T_odom_to_camera.inverse();
+            // 直接构造 T_camera_to_odom (与 jlu_vision_26 因子约定一致)
+            T_camera_to_odom = Eigen::Isometry3d::Identity();
+            T_camera_to_odom.rotate(R_c2o);
+            T_camera_to_odom.pretranslate(t_c2o);
+            // 逆变换用于 armor pose 转换到 camera 系
+            T_odom_to_camera = T_camera_to_odom.inverse();
         } catch (const tf2::TransformException& e) {
             RCLCPP_WARN_SKIPFIRST(get_logger(), "TF lookup failed: %s", e.what());
         }
@@ -181,9 +193,10 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
         auto k_dz = optimizer_->key("dz", 0);
 
         // 装甲板角点局部坐标 (与 armor_simulation 一致)
+        // autoaim 约定: X=前(法向), Y=左(宽度), Z=上(高度)
         std::array<Eigen::Vector3d, 4> corners_local = {{
-            {-0.0675, 0, -0.0625}, {-0.0675, 0, 0.0625},
-            { 0.0675, 0,  0.0625}, { 0.0675, 0,-0.0625}
+            {0, -0.0675, -0.0625}, {0, -0.0675, 0.0625},
+            {0,  0.0675,  0.0625}, {0,  0.0675,-0.0625}
         }};
 
         for (size_t ai = 0; ai < msg->armors.size(); ai++) {
@@ -240,30 +253,95 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
                 0.05, 0.80);
         }
     } else {
-        // YPD观测 (单装甲板)
-        const auto& armor = msg->armors[0];
-        matchArmor(armor);
-        double yaw_obs = std::atan2(armor.pose.position.y, armor.pose.position.x);
-        double distance = std::sqrt(
-            armor.pose.position.x * armor.pose.position.x +
-            armor.pose.position.y * armor.pose.position.y +
-            armor.pose.position.z * armor.pose.position.z);
-        double pitch = std::atan2(armor.pose.position.z,
-            std::sqrt(armor.pose.position.x * armor.pose.position.x +
-                      armor.pose.position.y * armor.pose.position.y));
+        // YPD观测 (支持单板/双板)
+        if (msg->armors.size() >= 2) {
+            // ── 双板观测: 相邻对匹配 + 8D 观测 ──
+            constexpr std::array<std::pair<int, int>, 4> adjacent_pairs = {{
+                {0, 1}, {1, 2}, {2, 3}, {3, 0}
+            }};
+            double yaw1 = msg->armors[0].yaw;
+            double yaw2 = msg->armors[1].yaw;
+            auto best_pair = adjacent_pairs[0];
+            double min_total_diff = std::numeric_limits<double>::max();
+            for (const auto& pair : adjacent_pairs) {
+                double diff1 = std::abs(auto_graph::shortestAngularDistance(
+                    pair.first * M_PI_2, yaw1)) +
+                    std::abs(auto_graph::shortestAngularDistance(
+                    pair.second * M_PI_2, yaw2));
+                double diff2 = std::abs(auto_graph::shortestAngularDistance(
+                    pair.second * M_PI_2, yaw1)) +
+                    std::abs(auto_graph::shortestAngularDistance(
+                    pair.first * M_PI_2, yaw2));
+                double total_diff = std::min(diff1, diff2);
+                if (total_diff < min_total_diff) {
+                    min_total_diff = total_diff;
+                    best_pair = diff1 < diff2
+                        ? std::make_pair(pair.first, pair.second)
+                        : std::make_pair(pair.second, pair.first);
+                }
+            }
 
-        Eigen::VectorXd z = Eigen::VectorXd::Zero(4);
-        z[0] = yaw_obs;
-        z[1] = pitch;
-        z[2] = distance;
-        z[3] = armor.yaw;  // orient_yaw
+            // 构建 8D 观测向量
+            Eigen::VectorXd z = Eigen::VectorXd::Zero(8);
+            Eigen::MatrixXd R_mat = Eigen::MatrixXd::Zero(8, 8);
+            for (int i = 0; i < 2; i++) {
+                const auto& armor = msg->armors[i];
+                double yaw_obs = std::atan2(armor.pose.position.y, armor.pose.position.x);
+                double dist = std::sqrt(armor.pose.position.x * armor.pose.position.x +
+                                        armor.pose.position.y * armor.pose.position.y +
+                                        armor.pose.position.z * armor.pose.position.z);
+                double pitch = std::atan2(armor.pose.position.z,
+                    std::sqrt(armor.pose.position.x * armor.pose.position.x +
+                              armor.pose.position.y * armor.pose.position.y));
+                int off = i * 4;
+                z[off + 0] = yaw_obs;
+                z[off + 1] = pitch;
+                z[off + 2] = dist;
+                z[off + 3] = armor.yaw;
+                R_mat(off + 0, off + 0) = r_pose_;
+                R_mat(off + 1, off + 1) = r_pose_;
+                R_mat(off + 2, off + 2) = r_distance_ * dist * dist;
+                R_mat(off + 3, off + 3) = r_yaw_;
+            }
+            ArmorCVMeasureYPDDouble measure_double(best_pair.first, best_pair.second);
 
-        Eigen::MatrixXd R_mat = Eigen::MatrixXd::Zero(4, 4);
-        R_mat(0, 0) = r_pose_;
-        R_mat(1, 1) = r_pose_;
-        R_mat(2, 2) = r_distance_ * distance * distance;
-        R_mat(3, 3) = r_yaw_;
-        optimizer_->update<ArmorCVMeasureYPD>(z, R_mat);
+            // 角度连续性处理
+            Eigen::VectorXd x_st = optimizer_->getState();
+            for (int i = 0; i < 2; ++i) {
+                int off = i * 4;
+                int idx = (i == 0) ? best_pair.first : best_pair.second;
+                double pred_yaw = std::atan2(x_st[2], x_st[0]) + idx * M_PI_2;
+                z[off] = get_closest_angle(z[off], pred_yaw);
+                z[off + 3] = get_closest_angle(z[off + 3],
+                    x_st[6] + M_PI_2 * idx);
+            }
+            optimizer_->update<ArmorCVMeasureYPDDouble>(measure_double, z, R_mat);
+        } else {
+            // 单板观测 (fallback)
+            const auto& armor = msg->armors[0];
+            matchArmor(armor);
+            double yaw_obs = std::atan2(armor.pose.position.y, armor.pose.position.x);
+            double distance = std::sqrt(
+                armor.pose.position.x * armor.pose.position.x +
+                armor.pose.position.y * armor.pose.position.y +
+                armor.pose.position.z * armor.pose.position.z);
+            double pitch = std::atan2(armor.pose.position.z,
+                std::sqrt(armor.pose.position.x * armor.pose.position.x +
+                          armor.pose.position.y * armor.pose.position.y));
+
+            Eigen::VectorXd z = Eigen::VectorXd::Zero(4);
+            z[0] = yaw_obs;
+            z[1] = pitch;
+            z[2] = distance;
+            z[3] = armor.yaw;  // orient_yaw
+
+            Eigen::MatrixXd R_mat = Eigen::MatrixXd::Zero(4, 4);
+            R_mat(0, 0) = r_pose_;
+            R_mat(1, 1) = r_pose_;
+            R_mat(2, 2) = r_distance_ * distance * distance;
+            R_mat(3, 3) = r_yaw_;
+            optimizer_->update<ArmorCVMeasureYPD>(z, R_mat);
+        }
     }
 
     // iSAM2 增量优化 (冷启动前 3 帧只建图, 之后每帧优化)

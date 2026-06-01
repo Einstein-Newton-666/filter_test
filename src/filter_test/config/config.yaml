@@ -51,6 +51,10 @@
     s2qr: 10.0
     s2qdz: 0.1
 
+    # 速度平滑噪声 (2D观测模式, 独立速度正则化)
+    s2qvel: 0.1
+    s2qvyaw: 0.1
+
     # 仿真模式R参数
     r_pose: 0.001
     r_distance: 0.001
@@ -83,4 +87,4 @@
 
 /gimbal_simulation:
   ros__parameters:
-    use_ground_truth_tracking: true
+    publish_rate: 200

@@ -45,7 +45,7 @@ private:
         double y = msg->enemy.position.y;
         double z = msg->enemy.position.z;
 
-        double target_yaw   = std::atan2(x, -y);
+        double target_yaw   = std::atan2(y, x);             // R_o2c 光轴 (cosθ,sinθ) ∥ (x,y)
         double target_pitch = -std::atan2(z, std::sqrt(x*x + y*y));
 
         auto_aim_interfaces::msg::SendData send;

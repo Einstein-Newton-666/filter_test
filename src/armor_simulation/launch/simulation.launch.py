@@ -9,7 +9,6 @@ def generate_launch_description():
         get_package_share_directory('armor_simulation'), 'config')
     config_file = os.path.join(config_dir, 'simulation_config.yaml')
 
-    # 3D仿真器节点
     armor_simulation_node = Node(
         package='armor_simulation',
         executable='armor_simulation_node',
@@ -18,16 +17,6 @@ def generate_launch_description():
         parameters=[config_file],
     )
 
-    # 2D相机仿真器节点
-    camera_simulator_node = Node(
-        package='armor_simulation',
-        executable='camera_simulator',
-        name='camera_simulator',
-        output='screen',
-        parameters=[config_file],
-    )
-
     return LaunchDescription([
         armor_simulation_node,
-        camera_simulator_node,
     ])
