@@ -208,18 +208,22 @@ enum MatchState { MATCH_NONE, MATCH_SINGLE, MATCH_DOUBLE };
 ```yaml
 /filter:
   ros__parameters:
-    use_simulation: true; use_ekf: false; use_cv_model: false
-    s2qxy_cv: 0.1; s2qz_cv: 0.1; s2qyaw_cv: 0.1   # CV 过程噪声
+    use_ekf: false; use_cv_model: true
+    s2qxy_cv: 0.1; s2qz_cv: 0.1; s2qyaw_cv: 0.5   # CV 过程噪声
     s2qr_cv: 10.0; s2qdz_cv: 0.1
     s2qxy_singer: 0.05; s2qz_singer: 0.05          # Singer 过程噪声
-    s2qyaw_singer: 0.01; s2qr_singer: 5.0; s2qdz_singer: 0.01
+    s2qyaw_singer: 0.1; s2qr_singer: 10.0; s2qdz_singer: 0.01
     tau_singer: 2.0
-    r_pose_sim: 0.001; r_distance_sim: 0.001        # 仿真 R (固定)
-    r_yaw_sim: 0.001
     r_pose_det: 0.01; r_distance_det: 0.01          # 检测器 R (距离+角度相关)
-    r_yaw_det: 0.01
+    r_yaw_det: 0.05
     ukf_alpha: 0.01; ukf_beta: 2.0; ukf_kappa: 0.0
     init_r: 0.25                                    # 注: 当前代码硬编码为 0.25
+
+/graph_optimizer_test:
+  ros__parameters:
+    s2qvel: 0.0001; s2qvyaw: 0.0025                 # 运动因子速度方差
+    vel_sigma: 0.01; vyaw_sigma: 0.05               # VelSmooth/VyawSmooth 标准差
+    geo_yaw: 0.05                                   # 几何 yaw 约束过强会导致数值问题
 ```
 
 ## 调优指南
@@ -233,6 +237,7 @@ enum MatchState { MATCH_NONE, MATCH_SINGLE, MATCH_DOUBLE };
 | UKF 不收敛 | 减小 `ukf_alpha` (默认 0.01), 增大 `ukf_beta` |
 | Singer NaN | 增大 `tau_singer` |
 | r1/r2 漂移过大 | clamp 范围 [0.15, 0.4], 增大 s2qr |
+| iSAM2 欠约束/速度漂移 | 调小 `vel_sigma/vyaw_sigma` 或检查 2D 模式的 Pose3 prior/几何因子 |
 
 ## 添加新运动/观测模型
 

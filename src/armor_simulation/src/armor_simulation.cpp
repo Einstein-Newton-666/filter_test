@@ -74,6 +74,7 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     noise_params.pixel_noise_optimal          = declare_parameter<double>("pixel_noise_optimal", 1.5);
     noise_params.pixel_noise_optimal_distance = declare_parameter<double>("pixel_noise_optimal_distance", 5.0);
     noise_params.pixel_noise_curvature        = declare_parameter<double>("pixel_noise_curvature", 0.125);
+    noise_params.pixel_noise_common_ratio     = declare_parameter<double>("pixel_noise_common_ratio", 0.7);
     noise_params.use_outliers                 = declare_parameter<bool>("use_outliers", true);
     noise_params.outlier_probability          = declare_parameter<double>("outlier_probability", 0.05);
     noise_params.outlier_std                  = declare_parameter<double>("outlier_std", 10.0);
@@ -83,6 +84,7 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     noise_params.miss_probability             = declare_parameter<double>("miss_probability", 0.05);
     noise_model_ = std::make_unique<DetectionNoise>(noise_params,
         declare_parameter<int>("noise_seed", 42));
+    pixel_noise_enabled_ = declare_parameter<bool>("pixel_noise_enabled", true);
     enemy_color_ = declare_parameter<std::string>("enemy_color", "blue");
     publish_image_ = declare_parameter<bool>("publish_image", false);
     publish_gimbal_gt_ = declare_parameter<bool>("publish_gimbal_gt", false);
@@ -119,7 +121,7 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     // 真值 marker: 始终显示全部 4 块 (半透明绿色)
     gt_marker_.ns = "armors_gt";
     gt_marker_.type = visualization_msgs::msg::Marker::CUBE;
-    gt_marker_.scale.x = 0.005; gt_marker_.scale.y = 0.135; gt_marker_.scale.z = 0.125;
+    gt_marker_.scale.x = 0.005; gt_marker_.scale.y = 0.135; gt_marker_.scale.z = SMALL_ARMOR_HEIGHT;
     gt_marker_.color.a = 0.5;
     gt_marker_.color.r = 0.0; gt_marker_.color.g = 1.0; gt_marker_.color.b = 0.0;
     gt_marker_.lifetime = rclcpp::Duration::from_seconds(0.1);
@@ -127,7 +129,7 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     // 观测 marker: 仅通过过滤的装甲板 (不透明, 模拟检测器输出)
     obs_marker_.ns = "armors_obs";
     obs_marker_.type = visualization_msgs::msg::Marker::CUBE;
-    obs_marker_.scale.x = 0.005; obs_marker_.scale.y = 0.135; obs_marker_.scale.z = 0.125;
+    obs_marker_.scale.x = 0.005; obs_marker_.scale.y = 0.135; obs_marker_.scale.z = SMALL_ARMOR_HEIGHT;
     obs_marker_.color.a = 1.0;
     obs_marker_.color.g = 0.7; obs_marker_.color.b = 1.0;
     obs_marker_.lifetime = rclcpp::Duration::from_seconds(0.1);
@@ -204,7 +206,7 @@ void ArmorSimulation::publishSimulation() {
     // ── 装甲板计算 + 相机投影 + 噪声 + PnP ──
     auto_aim_interfaces::msg::Armors detector_msg;
     detector_msg.header.stamp = now;
-    detector_msg.header.frame_id = "camera_optical_frame";
+    detector_msg.header.frame_id = "odom";
 
     marker_array_.markers.clear();
 
@@ -236,18 +238,18 @@ void ArmorSimulation::publishSimulation() {
         double armor_yaw = yaw + i * M_PI_2;
         double r  = (i % 2 == 0) ? r1 : r2;
         double dz = (i % 2 == 0) ? 0.0 : (z2 - z1);
-        Eigen::Vector3d pos(x + cos(armor_yaw) * r, y + sin(armor_yaw) * r, z1 + dz);
+        Eigen::Vector3d pos(x - cos(armor_yaw) * r, y - sin(armor_yaw) * r, z1 + dz);  // center - r*(cos,sin) 对齐 jlu
         double dist_cam = (pos - camera_pos_odom).norm();
 
-        // 中心→装甲板方向 = armor_yaw (pos = center + r*normal, autoaim 约定)
-        double yaw_center_to_armor = armor_yaw;
+        // 中心→装甲板方向 = armor_yaw + π (pos = center - r*n, 对齐 jlu)
+        double yaw_center_to_armor = angles::normalize_angle(armor_yaw + M_PI);
         double angle_diff = std::abs(
             angles::shortest_angular_distance(yaw_center_to_armor, yaw_center_to_cam));
         bool on_camera_side = angle_diff <= M_PI / 3.0;  // ±60°
 
         // 装甲板方向
         tf2::Quaternion tf_q;
-        tf_q.setRPY(0, -15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
+        tf_q.setRPY(0, 15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
         Eigen::Quaterniond orient(tf_q.w(), tf_q.x(), tf_q.y(), tf_q.z());
 
         // 投影角点 (与检测使用相同约定: computeArmorCorners)
@@ -357,10 +359,10 @@ void ArmorSimulation::publishSimulation() {
         std::array<Eigen::Vector2d, 4> pixels_gt;
         if (publish_image_) pixels_gt = pixels;
 
-        for (int j = 0; j < 4; j++)
-            pixels[j] = noise_model_->addPixelNoise(pixels[j], distance);
+        if (pixel_noise_enabled_) pixels = noise_model_->addArmorPixelNoise(pixels, distance);
 
         auto pnp = camera_model_.estimatePose(pixels, width, height);
+        if (!pnp.success) continue;
 
         auto_aim_interfaces::msg::Armor armor;
         armor.number = "4";
@@ -370,13 +372,16 @@ void ArmorSimulation::publishSimulation() {
         armor.pose.position.x = pnp.position_odom.x();
         armor.pose.position.y = pnp.position_odom.y();
         armor.pose.position.z = pnp.position_odom.z();
-        armor.pose.orientation.x = pnp.orientation_odom.x();
-        armor.pose.orientation.y = pnp.orientation_odom.y();
-        armor.pose.orientation.z = pnp.orientation_odom.z();
-        armor.pose.orientation.w = pnp.orientation_odom.w();
 
-        Eigen::Vector3d rpy = pnp.orientation_odom.toRotationMatrix().eulerAngles(2, 1, 0);
-        armor.yaw = static_cast<float>(rpy[0]);
+        // 修正共面 PnP 双解歧义: 两个解 yaw 差 π, 选接近真值 (armor_yaw) 的.
+        // 必须先修正 orientation 再写消息, 否则 pose.orientation 和 armor.yaw 会不一致.
+        auto corrected_pose = correctPlanarPnPAmbiguity(
+            pnp.orientation_odom, angles::normalize_angle(armor_yaw));
+        armor.pose.orientation.x = corrected_pose.orientation.x();
+        armor.pose.orientation.y = corrected_pose.orientation.y();
+        armor.pose.orientation.z = corrected_pose.orientation.z();
+        armor.pose.orientation.w = corrected_pose.orientation.w();
+        armor.yaw = static_cast<float>(corrected_pose.yaw);
         armor.optimized_yaw = armor.yaw;
         for (int j = 0; j < 4; j++) {
             armor.detected_points[j].x = pixels[j].x();
@@ -393,7 +398,7 @@ void ArmorSimulation::publishSimulation() {
         obs_marker_.pose.position.y = pos.y();
         obs_marker_.pose.position.z = pos.z();
         tf2::Quaternion tf_q;
-        tf_q.setRPY(0, -15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
+        tf_q.setRPY(0, 15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
         obs_marker_.pose.orientation = tf2::toMsg(tf_q);
         marker_array_.markers.push_back(obs_marker_);
 
@@ -432,9 +437,9 @@ void ArmorSimulation::publishSimulation() {
         if (last_fcnt > 0) {
             double elapsed = std::chrono::duration<double>(now_tick - last_tick).count();
             RCLCPP_INFO(get_logger(),
-                "frame %d: vis=%d pub=%zu pos=(%.1f,%.1f) %.0fHz dt=%.1fms",
+                "frame %d: vis=%d pub=%zu pos=(%.1f,%.1f) r=%.1f %.0fHz dt=%.1fms",
                 frame_cnt, n_vis, detector_msg.armors.size(), x, y,
-                100.0 / elapsed, (now - last_t).seconds() * 1000);
+                std::sqrt(x*x + y*y), 100.0 / elapsed, dt * 1000);
         }
         last_fcnt = frame_cnt;
         last_tick = now_tick;

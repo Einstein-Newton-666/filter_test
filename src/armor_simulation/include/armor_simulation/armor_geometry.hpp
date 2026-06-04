@@ -11,13 +11,15 @@ constexpr double SMALL_ARMOR_WIDTH = 0.135;   // 135mm
 constexpr double SMALL_ARMOR_HEIGHT = 0.125;  // 125mm
 constexpr double LARGE_ARMOR_WIDTH = 0.230;   // 230mm
 constexpr double LARGE_ARMOR_HEIGHT = 0.125;  // 125mm
+// 检测器提取的灯条角点尺寸 (对齐 jlu_vision_26 ArmorPoints.hpp LIGHTBAR_LENGTH=56mm)
+constexpr double LIGHTBAR_LENGTH = 0.056;
 
 /**
  * 计算装甲板4个角点（odom系）
  *
- * 装甲板坐标系约定：
- * - X: 装甲板宽度方向（从左到右）
- * - Y: 装甲板法线方向（指向外）
+ * 装甲板坐标系约定 (autoaim / jlu 对齐)：
+ * - X: 装甲板法线方向（指向外）
+ * - Y: 装甲板宽度方向（左/右）
  * - Z: 装甲板高度方向（从下到上）
  *
  * 返回：[左下, 左上, 右上, 右下]

@@ -6,6 +6,9 @@
 #include <memory>
 #include <utility>
 
+#include "filter_test/graph_optimizer_test.hpp"
+#include "filter_test/visualization_marker_utils.hpp"
+
 // 注意：由于GTSAM未安装C++版本，此测试仅验证不依赖GTSAM的部分
 // 完整测试需要安装GTSAM C++库
 
@@ -302,6 +305,58 @@ TEST(LinearizationTest, AngleObservation) {
 
     EXPECT_NEAR(dz_dx, -0.5, 1e-10);
     EXPECT_NEAR(dz_dy, 0.5, 1e-10);
+}
+
+TEST(ArmorCenterFactorTest, YawJacobianMatchesFiniteDifference) {
+    gtsam::Key k_armor = gtsam::Symbol('h', 0);
+    gtsam::Key k_pos = gtsam::Symbol('a', 0);
+    gtsam::Key k_yaw = gtsam::Symbol('b', 0);
+    gtsam::Key k_radius = gtsam::Symbol('c', 0);
+    gtsam::Key k_dz = gtsam::Symbol('d', 0);
+
+    auto noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector4::Ones());
+    ArmorCenterFactor factor(k_armor, k_pos, k_yaw, k_radius, k_dz, noise,
+                             1, Eigen::Isometry3d::Identity(), 0.10, 0.60);
+
+    gtsam::Pose3 armor_pose(
+        gtsam::Rot3::RzRyRx(0.08, 0.18, 0.6),
+        gtsam::Point3(1.0, -2.0, 0.3));
+    gtsam::Vector pos_vel(6);
+    pos_vel << 1.4, 0.0, -1.5, 0.0, 0.45, 0.0;
+    gtsam::Vector yaw_vyaw(2);
+    yaw_vyaw << -0.2, 0.0;
+    gtsam::Vector radius(2);
+    radius << 0.0, 0.0;
+    gtsam::Vector dz(1);
+    dz << 0.12;
+
+    gtsam::Matrix H1, H2, H3, H4, H5;
+    gtsam::Vector err = factor.evaluateError(
+        armor_pose, pos_vel, yaw_vyaw, radius, dz, &H1, &H2, &H3, &H4, &H5);
+
+    const double eps = 1e-6;
+    gtsam::Vector6 delta = gtsam::Vector6::Zero();
+    delta(2) = eps;  // yaw-axis local rotation perturbation for this pose.
+    gtsam::Pose3 perturbed = armor_pose.retract(delta);
+    gtsam::Vector err_perturbed = factor.evaluateError(
+        perturbed, pos_vel, yaw_vyaw, radius, dz, nullptr, nullptr, nullptr, nullptr, nullptr);
+    double numeric = (err_perturbed[3] - err[3]) / eps;
+
+    EXPECT_NEAR(H1(3, 2), numeric, 1e-5);
+}
+
+TEST(GraphOptimizerVisualizationTest, RadiusConversionUsesTrackerRadiusBounds) {
+    EXPECT_NEAR(filter_test::graphOptimizerRadiusFromState(0.0), 0.35, 1e-12);
+}
+
+TEST(GraphOptimizerVisualizationTest, ObservedArmorMarkerPitchMatchesSimulation) {
+    tf2::Matrix3x3 rotation(filter_test::observedArmorMarkerQuaternion(0.0));
+    double roll = 0.0, pitch = 0.0, yaw = 0.0;
+    rotation.getRPY(roll, pitch, yaw);
+
+    EXPECT_NEAR(roll, 0.0, 1e-12);
+    EXPECT_NEAR(pitch, 15.0 * M_PI / 180.0, 1e-12);
+    EXPECT_NEAR(yaw, 0.0, 1e-12);
 }
 
 // ==================== 测试异常值检测 ====================

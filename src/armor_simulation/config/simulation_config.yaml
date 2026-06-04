@@ -6,30 +6,30 @@
     # 过程噪声 — CWNA 连续白噪声加速度模型
     # a_random = sqrt(q/dt) · N(0,1)
     # 4秒后: σ_pos≈sqrt(q·t³/3)=1.5m, σ_vel≈sqrt(q·t)=0.6m/s (q_xy=0.1)
-    process_noise_xy: 0.05         # 小幅随机横向运动
-    process_noise_yaw: 0.1         # 小幅随机角加速度
+    process_noise_xy: 0.0         # 小幅随机横向运动
+    process_noise_yaw: 0.0         # 小幅随机角加速度
     process_noise_seed: 42         # 随机种子
 
-    # ── 径向距离约束 ──
-    radial_min: 3.0                # 最近可检测距离 (m)
-    radial_max: 7.0                # 最远可检测距离 (m)
+    # ── 径向距离约束 ──(实际上由于刹车加速度不是无穷大会大于这个范围)
+    radial_min: 4.0                # 最近可检测距离 (m)
+    radial_max: 6.0                # 最远可检测距离 (m)
 
     # 运动限制
     linear_limit: -1.0             # 关 (用 radial_min/max 替代)
     angle_limit: -10.0             # 角度限幅 (rad), 负值=不限
     linear_speed_limit: 1.2        # 线速度限幅 (m/s)
     angle_speed_limit: 10.0        # 角速度限幅 (rad/s)
-    linear_acceleration: 0.2       # 线加速度 (m/s², 用于边界刹车)
+    linear_acceleration: 0.3       # 线加速度 (m/s², 用于边界刹车)
     angular_acceleration: 0.3924   # 角加速度 (rad/s², ≈π/8)
 
     # 初始状态
     # 机器人位于相机正前方 (roll=-90° 时相机沿 -Y 方向看)
     initial_state:
       x: 0.0
-      y: -5.0                      # 相机前方 5m
+      y: -4.0                      # 相机前方 5m
       yaw: 0.1
       x_velocity: 0.0
-      y_velocity: -1.5             # 相机前方运动
+      y_velocity: 0.0              # 相机前方运动
       yaw_velocity: 2.0            # 中速旋转
       x_acceleration: 0.5
       y_acceleration: 0.5          # 加速远离
@@ -58,17 +58,25 @@
 
     # 相机内参 (外参通过 TF odom→camera_optical_frame 动态获取)
 
-    # ── 像素噪声 — U 形距离模型 ──
-    # σ_pixel(d) = σ_min + k·(d - d_opt)²
+    # ── 像素噪声 — U 形距离模型 + 装甲板级相关噪声 ──
+    # 单点标准差: σ_pixel(d) = σ_min + k·(d - d_opt)²
+    # 四角点噪声: p_i' = p_i + n_c + n_i
+    #   n_c ~ N(0, (ρσ)^2 I)                         # 整块装甲板共同平移
+    #   n_i ~ N(0, ((sqrt(1-ρ²))σ)^2 I)               # 单角点独立残差
+    # 因此 Var(n_c+n_i)=σ²I, 单角点总方差不变；ρ 越大越少破坏矩形形状,
+    # PnP yaw 抖动越小。ρ=0 退化为四角点完全独立噪声。
+    pixel_noise_enabled: true        # 关闭像素噪声 → PnP 无噪
     # 物理依据: 角点检测精度由边缘梯度质量决定
     #   近处: 边缘跨度大 → 梯度分散 → σ↑
     #   最优 (d≈5m): 边缘 3-5px → 梯度最集中 → σ 最小
     #   远处: 边缘 <2px → 锯齿 (aliasing) → σ↑
     # d=2m→2.6px  d=3m→2.0px  d=5m→1.5px(最优)  d=8m→2.6px  d=12m→7.6px
     # 注意: 3D 位姿误差的距离缩放由 PnP 自动完成，无需在像素层重复
-    pixel_noise_optimal: 1.5          # 最优距离的最小噪声 (px)
+    # σ 调太大时平面 PnP 的两个候选解重投影误差会接近, yaw 更容易跳变。
+    pixel_noise_optimal: 0.5          # 最优距离的最小噪声 (px)
     pixel_noise_optimal_distance: 5.0 # 最优距离 (m)
-    pixel_noise_curvature: 0.125      # 曲率 k
+    pixel_noise_curvature: 0.025      # 曲率 k
+    pixel_noise_common_ratio: 0.7      # ρ: 整体平移噪声占比；建议 0.7~0.9
 
     # ── 离群点 ──
     # 模拟真实检测器的严重偏离 (反光、遮挡、误匹配)

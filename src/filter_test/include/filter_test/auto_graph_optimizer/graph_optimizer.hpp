@@ -4,6 +4,8 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/nonlinear/ISAM2.h>
+#include <gtsam/nonlinear/IncrementalFixedLagSmoother.h>
+#include <gtsam/nonlinear/BatchFixedLagSmoother.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/inference/Symbol.h>
@@ -249,11 +251,16 @@ private:
 };
 
 
+enum class SmootherType { Incremental, Batch };
+
 struct GraphOptimizerConfig {
     double relinearize_threshold = 0.01;
     int    relinearize_skip       = 1;
     int    cold_start_frames      = 5;   // 冷启动帧数, 前N帧只建图不优化
-    int    max_window_frames      = 20;  // 滑动窗口大小, 0=不限制
+    int    max_window_frames      = 20;  // 周期性重置帧数, 0=不限制
+    double smoother_lag           = 0.0; // 固定滞后帧数, 0=纯iSAM2无边际化, N=保留最近N帧
+    SmootherType smoother_type    = SmootherType::Incremental;  // 平滑器类型
+    int    extra_iterations       = 0;   // 每次update后额外iSAM2迭代 (GTSAM示例使用2-3次)
     bool   verbose                = false;
 };
 
@@ -322,7 +329,7 @@ public:
         layout_ = layout;
         x_ = x0;
         frame_id_ = 0;
-        isam2_.reset();
+        smootherReset();
 
         // 将初态 scatter 到 Values
         layout_.scatterInto(x0, initial_values_, 0);
@@ -373,7 +380,7 @@ public:
 
             // 注册初始值 (跳过已在 iSAM2 中的 key)
             if (!initial_values_.exists(k_cur)) {
-                bool in_isam2 = isam2_ && isam2_->getLinearizationPoint().exists(k_cur);
+                bool in_isam2 = hasSmoother() && smootherLinearizationPoint().exists(k_cur);
                 if (!in_isam2) {
                     gtsam::Vector v(g.dim());
                     for (int j = 0; j < g.dim(); ++j)
@@ -407,7 +414,7 @@ public:
     // ── 分步运动因子 (per-group, 配合 advanceFrame 使用) ──
 
     /// 推进帧号
-    void advanceFrame(double dt) {
+    void advanceFrame(double /*dt*/) {
         if (!initialized_) throw std::runtime_error("GraphOptimizer::advanceFrame: not initialized");
         frame_id_++;
     }
@@ -430,7 +437,7 @@ public:
         gtsam::Key k_cur  = layout_.key(group_name, frame_id_);
 
         if (!initial_values_.exists(k_cur)) {
-            bool in_isam2 = isam2_ && isam2_->getLinearizationPoint().exists(k_cur);
+            bool in_isam2 = hasSmoother() && smootherLinearizationPoint().exists(k_cur);
             if (!in_isam2) {
                 gtsam::Vector v(g->dim());
                 for (int j = 0; j < g->dim(); ++j)
@@ -477,7 +484,7 @@ public:
         // 注册初始值 (跳过已在 iSAM2 中的 key)
         for (auto& g : layout_.groups()) {
             gtsam::Key k = layout_.key(g.name, g.is_static ? 0 : frame_id_);
-            bool in_isam2 = isam2_ && isam2_->getLinearizationPoint().exists(k);
+            bool in_isam2 = hasSmoother() && smootherLinearizationPoint().exists(k);
             if (!initial_values_.exists(k) && !in_isam2) {
                 gtsam::Vector v(g.dim());
                 for (int j = 0; j < g.dim(); ++j)
@@ -530,7 +537,7 @@ public:
 
     /// 插入 armor Pose3 初值 (跳过已在 iSAM2 中的 key)
     void insertArmorPose(gtsam::Key k, const gtsam::Pose3& pose) {
-        bool in_isam2 = isam2_ && isam2_->getLinearizationPoint().exists(k);
+        bool in_isam2 = hasSmoother() && smootherLinearizationPoint().exists(k);
         if (!initial_values_.exists(k) && !in_isam2)
             initial_values_.insert(k, pose);
     }
@@ -568,24 +575,68 @@ public:
                       << " factors" << std::endl;
         }
 
-        // ── 滑动窗口边际化 ──
-        if (config_.max_window_frames > 0 && frames_since_reset_ >= config_.max_window_frames) {
+        // ── 滑动窗口边际化 (旧方案, 仅 smoother_lag=0 时使用) ──
+        if (config_.smoother_lag <= 0 && config_.max_window_frames > 0 &&
+            frames_since_reset_ >= config_.max_window_frames) {
             slideWindow();
         }
 
         try {
-            if (!isam2_) {
-                gtsam::ISAM2Params p;
-                p.relinearizeThreshold = config_.relinearize_threshold;
-                p.relinearizeSkip = config_.relinearize_skip;
-                // 启用部分重线性化以应对 autodiff 因子的线性化点变化
-                p.enablePartialRelinearizationCheck = true;
-                isam2_ = std::make_unique<gtsam::ISAM2>(p);
+            if (!hasSmoother()) {
+                if (config_.smoother_lag <= 0) {
+                    // 纯 ISAM2 (对齐 jlu, 无边际化)
+                    gtsam::ISAM2Params p;
+                    p.relinearizeThreshold = config_.relinearize_threshold;
+                    p.relinearizeSkip = config_.relinearize_skip;
+                    p.enablePartialRelinearizationCheck = true;
+                    p.findUnusedFactorSlots = true;
+                    isam2_ = std::make_unique<gtsam::ISAM2>(p);
+                } else if (config_.smoother_type == SmootherType::Incremental) {
+                    gtsam::ISAM2Params p;
+                    p.relinearizeThreshold = config_.relinearize_threshold;
+                    p.relinearizeSkip = config_.relinearize_skip;
+                    p.enablePartialRelinearizationCheck = true;
+                    p.findUnusedFactorSlots = true;
+                    inc_smoother_ = std::make_unique<gtsam::IncrementalFixedLagSmoother>(
+                        config_.smoother_lag, p);
+                } else {
+                    gtsam::LevenbergMarquardtParams lm;
+                    lm.setMaxIterations(10);
+                    lm.setRelativeErrorTol(1e-5);
+                    lm.setAbsoluteErrorTol(1e-5);
+                    batch_smoother_ = std::make_unique<gtsam::BatchFixedLagSmoother>(
+                        config_.smoother_lag, lm);
+                }
             }
 
-            isam2_->update(graph_, initial_values_);
-            auto est = isam2_->calculateEstimate();
-            x_ = layout_.gather(est, frame_id_);
+            if (config_.smoother_lag <= 0) {
+                // ── 纯 ISAM2 路径 (对齐 jlu_tracker) ──
+                isam2_->update(graph_, initial_values_);
+                // 额外迭代收敛
+                for (int i = 1; i < config_.extra_iterations; ++i) {
+                    isam2_->update();
+                }
+                auto est = isam2_->calculateEstimate();
+                x_ = layout_.gather(est, frame_id_);
+            } else {
+                // ── FixedLagSmoother 路径 (边际化) ──
+                gtsam::FixedLagSmoother::KeyTimestampMap timestamps;
+                for (const auto& [key, value] : initial_values_) {
+                    timestamps[key] = static_cast<double>(frame_id_);
+                }
+                for (auto& g : layout_.groups()) {
+                    if (g.is_static) {
+                        timestamps[layout_.key(g.name, 0)] =
+                            static_cast<double>(frame_id_);
+                    }
+                }
+                smoother().update(graph_, initial_values_, timestamps);
+                for (int i = 1; i < config_.extra_iterations; ++i) {
+                    smoother().update();
+                }
+                auto est = smoother().calculateEstimate();
+                x_ = layout_.gather(est, frame_id_);
+            }
             graph_.resize(0);
             initial_values_.clear();
 
@@ -608,12 +659,12 @@ public:
 
     /// 获取边际协方差 (从 iSAM2)
     Eigen::MatrixXd getCovariance() const {
-        if (!isam2_) return Eigen::MatrixXd::Identity(layout_.fullDim(), layout_.fullDim());
+        if (!hasSmoother()) return Eigen::MatrixXd::Identity(layout_.fullDim(), layout_.fullDim());
         Eigen::MatrixXd P = Eigen::MatrixXd::Zero(layout_.fullDim(), layout_.fullDim());
         try {
             for (auto& g : layout_.groups()) {
                 gtsam::Key k = layout_.key(g.name, g.is_static ? 0 : frame_id_);
-                auto cov = isam2_->marginalCovariance(k);
+                auto cov = smootherMarginalCovariance(k);
                 for (int r = 0; r < g.dim(); ++r)
                     for (int c = 0; c < g.dim(); ++c)
                         P(g.indices[r], g.indices[c]) = cov(r, c);
@@ -625,7 +676,7 @@ public:
     void reset() {
         graph_.resize(0);
         initial_values_.clear();
-        isam2_.reset();
+        smootherReset();
         x_.setZero();
         frame_id_ = 0;
         initialized_ = false;
@@ -639,7 +690,7 @@ private:
         Eigen::MatrixXd P_saved = getCovariance();
         uint64_t saved_frame = frame_id_;
 
-        isam2_.reset();
+        smootherReset();
         initial_values_.clear();
         graph_.resize(0);
         frames_since_reset_ = 0;
@@ -666,12 +717,43 @@ private:
     VariableLayout layout_{0};
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values initial_values_;
-    std::unique_ptr<gtsam::ISAM2> isam2_;
+    std::unique_ptr<gtsam::ISAM2> isam2_;                         // smoother_lag=0 时使用
+    std::unique_ptr<gtsam::IncrementalFixedLagSmoother> inc_smoother_;
+    std::unique_ptr<gtsam::BatchFixedLagSmoother> batch_smoother_;
     Eigen::VectorXd x_;
     uint64_t frame_id_ = 0;
     bool initialized_ = false;
     int cold_start_count_ = 0;
     int frames_since_reset_ = 0;
+
+    // ── 平滑器辅助方法 ──
+
+    bool hasSmoother() const { return isam2_ || inc_smoother_ || batch_smoother_; }
+
+    bool useFixedLag() const { return config_.smoother_lag > 0; }
+
+    gtsam::FixedLagSmoother& smoother() {
+        if (inc_smoother_) return *inc_smoother_;
+        return *batch_smoother_;
+    }
+
+    const gtsam::Values& smootherLinearizationPoint() const {
+        if (isam2_) return isam2_->getLinearizationPoint();
+        if (inc_smoother_) return inc_smoother_->getLinearizationPoint();
+        return batch_smoother_->getLinearizationPoint();
+    }
+
+    gtsam::Matrix smootherMarginalCovariance(gtsam::Key key) const {
+        if (isam2_) return isam2_->marginalCovariance(key);
+        if (inc_smoother_) return inc_smoother_->marginalCovariance(key);
+        return batch_smoother_->marginalCovariance(key);
+    }
+
+    void smootherReset() {
+        isam2_.reset();
+        inc_smoother_.reset();
+        batch_smoother_.reset();
+    }
 };
 
 } // namespace auto_graph

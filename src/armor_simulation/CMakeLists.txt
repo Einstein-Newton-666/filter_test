@@ -38,6 +38,22 @@ target_link_libraries(gimbal_simulation ${ts_target})
 # 角度解算器 placeholder
 ament_auto_add_executable(angle_solver src/angle_solver.cpp)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_lint_auto REQUIRED)
+  ament_auto_add_gtest(test_noise_model
+    test/test_noise_model.cpp
+  )
+  target_include_directories(test_noise_model PUBLIC
+    ${EIGEN3_INCLUDE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(test_noise_model
+    ${OpenCV_LIBS}
+  )
+  ament_lint_auto_find_test_dependencies()
+endif()
+
 ament_auto_package(
   INSTALL_TO_SHARE
   config

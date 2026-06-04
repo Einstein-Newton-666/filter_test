@@ -71,7 +71,7 @@ src/
 ├── armor_simulation/              # 仿真器 package (独立)
 │   ├── include/armor_simulation/
 │   │   ├── armor_simulation.hpp   # 3D 运动仿真器
-│   │   ├── camera_model.hpp       # 相机投影 + PnP
+│   │   ├── camera_model.hpp       # 相机投影 + IPPE PnP
 │   │   ├── armor_geometry.hpp     # 装甲板角点几何
 │   │   └── detection_noise.hpp    # 检测噪声 (U 形距离模型)
 │   ├── src/
@@ -128,6 +128,7 @@ src/
 - `SingleMotionFactor` — per-group 2-key 运动因子 (autodiff)
 - `AutoMotionFactor` — 全状态 2-key 运动因子 (autodiff, 兼容 YPD 模式)
 - `AutoMeasureFactor` — 全状态 N-key 观测因子 (autodiff)
+- 2D 模式额外有 `VelSmoothFactor` / `VyawSmoothFactor`，由 `vel_sigma` / `vyaw_sigma` 控制速度平滑
 
 两级像素观测 (对齐 jlu_vision_26)：
 - **第一级**: `ArmorReprojFactor` — 1-key Pose3(camera 系) → 2D 像素误差 (每角点), GTSAM Cal3DS2 投影+畸变
@@ -190,11 +191,18 @@ opt.solve();
 - `use_2d_observation`: 观测模式 (true=两级像素, false=YPD)
 - `cold_start_frames`: 冷启动帧数 (前 N 帧只累积不优化)
 - `s2qxy/s2qz/s2qyaw/s2qr/s2qdz`: 过程噪声
-- `s2qvel/s2qvyaw`: 速度平滑噪声 (2D 观测模式专用)
+- `s2qvel/s2qvyaw`: per-group 运动因子中的速度方差
+- `vel_sigma/vyaw_sigma`: `VelSmoothFactor` / `VyawSmoothFactor` 标准差
 - `r_pose/r_distance/r_yaw`: YPD 观测噪声
 - `pixel_noise_std`: 像素噪声 σ
 - `geo_tangential/radial/height/yaw`: 几何约束噪声
 - `camera_fx/fy/cx/cy`, `distortion_k1/k2/p1/p2`: 相机参数 (外参从 TF 动态获取)
+
+**仿真/PnP 当前约定**：
+- 装甲板局部坐标: `X=法线, Y=宽度, Z=高度`; 角点顺序 `[左下, 左上, 右上, 右下]`
+- 仿真装甲板位置: `pos = center - r * [cos(armor_yaw), sin(armor_yaw)]`, 可视化 pitch 为 `+15°`
+- `CameraModel::estimatePose()` 使用 OpenCV `SOLVEPNP_IPPE`; 平面 PnP 仍可能有两个相近候选，仿真侧用 `correctPlanarPnPAmbiguity()` 按 yaw 先验修正
+- 像素噪声为 U 形距离模型 + 装甲板级相关噪声: `p_i' = p_i + n_c + n_i`, `pixel_noise_common_ratio` 越大 yaw 越稳
 
 ## 依赖项
 
@@ -214,8 +222,8 @@ opt.solve();
 
 ## 已知问题
 
-- r2 过冲 (缺少独立 VelocityFactor 速度正则化；`s2qvel` 是部分替代方案)
-- yaw 为平坦标量 (无 SO(2) 角度包裹)
+- r2 过冲仍需重新调参；当前已有 `VelSmoothFactor`/`VyawSmoothFactor`，但半径估计仍依赖观测质量和几何约束
+- yaw 在部分传统滤波路径仍按平坦标量处理；图优化 `ArmorCenterFactor` 已对 yaw residual 做角度包裹
 - 匹配为启发式代价 (非马氏距离)
 - UKF 收敛速度比 EKF 慢
 - Singer 模型可能产生 NaN 值

@@ -61,11 +61,21 @@ def generate_launch_description():
         parameters=[filter_test_config],
     )
 
+    # jlu tracker (移植自 jlu_vision_26)
+    jlu_tracker_node = Node(
+        package='filter_test',
+        executable='jlu_tracker',
+        name='jlu_tracker',
+        output='screen',
+        parameters=[filter_test_config],
+    )
+
     return LaunchDescription([
         use_graph_optimizer,
         armor_simulation_node,
         gimbal_simulation_node,
         # angle_solver_node,
         # filter_node,
-        # graph_optimizer_node,
+        graph_optimizer_node,
+        # jlu_tracker_node,
     ])

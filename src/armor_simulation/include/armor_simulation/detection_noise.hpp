@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <algorithm>
+#include <array>
 #include <random>
 #include <cmath>
 
@@ -11,6 +13,7 @@ struct DetectionNoiseParams {
     double pixel_noise_optimal = 1.5;             // 最优距离的最小噪声 (px)
     double pixel_noise_optimal_distance = 5.0;    // 最优距离 (m)，边缘 3-5px 最锐
     double pixel_noise_curvature = 0.125;         // 曲率 k
+    double pixel_noise_common_ratio = 0.7;        // 装甲板整体平移噪声占比 ρ, 降低非刚体角点抖动
     //  物理: 近处梯度分散→σ↑, 最优处(3-5px边)σ最小, 远处锯齿→σ↑
     //  2m→2.6px  3m→2.0px  5m→1.5px(最优)  8m→2.6px  12m→7.6px
 
@@ -57,19 +60,40 @@ public:
      *       无需在像素层面重复建模。
      */
     Eigen::Vector2d addPixelNoise(const Eigen::Vector2d& pixel, double distance) {
-        double dd = distance - params_.pixel_noise_optimal_distance;
-        double sigma = params_.pixel_noise_optimal + params_.pixel_noise_curvature * dd * dd;
-        // 下限保护，防止数值问题
-        if (sigma < 0.5) sigma = 0.5;
-
-        // 离群点：偶尔角点严重偏离 (模拟反光、遮挡、误匹配)
-        if (params_.use_outliers && uniform_dist_(rng_) < params_.outlier_probability) {
-            sigma = params_.outlier_std;
-        }
-
+        double sigma = pixelNoiseSigma(distance);
         double noise_u = std::normal_distribution<double>(0.0, sigma)(rng_);
         double noise_v = std::normal_distribution<double>(0.0, sigma)(rng_);
         return Eigen::Vector2d(pixel.x() + noise_u, pixel.y() + noise_v);
+    }
+
+    std::array<Eigen::Vector2d, 4> addArmorPixelNoise(
+        const std::array<Eigen::Vector2d, 4>& pixels, double distance) {
+        double sigma = pixelNoiseSigma(distance);
+        double common_ratio = std::clamp(params_.pixel_noise_common_ratio, 0.0, 1.0);
+        // 装甲板级相关噪声分解:
+        //   p_i' = p_i + n_c + n_i
+        //   n_c ~ N(0, (ρσ)^2 I),  n_i ~ N(0, ((sqrt(1-ρ²))σ)^2 I)
+        // 非离群点满足 Var(n_c+n_i)=σ²I, 单点总方差不变；ρ 越大,
+        // 四角点共同平移成分越多, 越少破坏矩形的对边平行/宽高约束,
+        // PnP yaw 抖动越小.
+        double common_sigma = sigma * common_ratio;
+        double corner_sigma = sigma * std::sqrt(std::max(0.0, 1.0 - common_ratio * common_ratio));
+
+        Eigen::Vector2d common_noise(
+            std::normal_distribution<double>(0.0, common_sigma)(rng_),
+            std::normal_distribution<double>(0.0, common_sigma)(rng_));
+
+        std::array<Eigen::Vector2d, 4> noisy = pixels;
+        for (auto& pixel : noisy) {
+            double sigma_i = corner_sigma;
+            if (params_.use_outliers && uniform_dist_(rng_) < params_.outlier_probability) {
+                sigma_i = params_.outlier_std;
+            }
+            pixel += common_noise + Eigen::Vector2d(
+                std::normal_distribution<double>(0.0, sigma_i)(rng_),
+                std::normal_distribution<double>(0.0, sigma_i)(rng_));
+        }
+        return noisy;
     }
 
     /**
@@ -93,6 +117,12 @@ private:
     DetectionNoiseParams params_;
     std::mt19937 rng_;
     std::uniform_real_distribution<double> uniform_dist_;
+
+    double pixelNoiseSigma(double distance) const {
+        double dd = distance - params_.pixel_noise_optimal_distance;
+        double sigma = params_.pixel_noise_optimal + params_.pixel_noise_curvature * dd * dd;
+        return std::max(0.5, sigma);
+    }
 
     static double sigmoid(double x) {
         return 1.0 / (1.0 + std::exp(-x));

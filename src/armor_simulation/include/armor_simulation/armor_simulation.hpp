@@ -28,6 +28,7 @@
 #include "armor_simulation/camera_model.hpp"
 #include "armor_simulation/armor_geometry.hpp"
 #include "armor_simulation/detection_noise.hpp"
+#include "armor_simulation/pnp_pose_utils.hpp"
 
 using namespace std::chrono_literals;
 
@@ -62,6 +63,7 @@ private:
 
   // ── 噪声模型 ──
   std::unique_ptr<DetectionNoise> noise_model_;
+  bool pixel_noise_enabled_ = true;
   std::string enemy_color_;
 
   // ── 发布者 ──

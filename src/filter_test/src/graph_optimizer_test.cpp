@@ -22,6 +22,8 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     declare_parameter("s2qdz", 0.1);
     declare_parameter("s2qvel", 0.1);
     declare_parameter("s2qvyaw", 0.1);
+    declare_parameter("vel_sigma", 0.01);
+    declare_parameter("vyaw_sigma", 0.05);
     declare_parameter("r_pose", 0.01);
     declare_parameter("r_distance", 0.01);
     declare_parameter("r_yaw", 0.01);
@@ -46,6 +48,8 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     s2qdz_ = get_parameter("s2qdz").as_double();
     s2qvel_ = get_parameter("s2qvel").as_double();
     s2qvyaw_ = get_parameter("s2qvyaw").as_double();
+    vel_sigma_ = get_parameter("vel_sigma").as_double();
+    vyaw_sigma_ = get_parameter("vyaw_sigma").as_double();
     r_pose_ = get_parameter("r_pose").as_double();
     r_distance_ = get_parameter("r_distance").as_double();
     r_yaw_ = get_parameter("r_yaw").as_double();
@@ -73,9 +77,21 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     // 配置图优化器
     declare_parameter("verbose", true);
     declare_parameter("cold_start_frames", 3);
-    config_.max_window_frames = 15;
+    declare_parameter("smoother_lag", 0.0);
+    declare_parameter("smoother_type", "incremental");
+    declare_parameter("relinearize_threshold", 0.001);
+    declare_parameter("extra_iterations", 2);
+    declare_parameter("max_window_frames", 500);
     config_.cold_start_frames = get_parameter("cold_start_frames").as_int();
     config_.verbose = get_parameter("verbose").as_bool();
+    config_.smoother_lag = get_parameter("smoother_lag").as_double();
+    std::string st = get_parameter("smoother_type").as_string();
+    config_.smoother_type = (st == "batch")
+        ? auto_graph::SmootherType::Batch
+        : auto_graph::SmootherType::Incremental;
+    config_.relinearize_threshold = get_parameter("relinearize_threshold").as_double();
+    config_.extra_iterations = get_parameter("extra_iterations").as_int();
+    config_.max_window_frames = get_parameter("max_window_frames").as_int();
 
     // 创建订阅者
     armors_sub_ = create_subscription<auto_aim_interfaces::msg::Armors>(
@@ -137,25 +153,19 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
         // Per-group 运动模型: advanceFrame + addMotionFactor
         optimizer_->advanceFrame(dt);
 
-        // pos_vel: translation model (6D), 位置用 s2qxy_/s2qz_, 速度用独立 s2qvel_
+        // pos_vel: 对角噪声 (替换 CWNA). dt=0.01 时 CWNA σ_pos≈1.6e-5m
+        // → 运动因子比观测因子强 10^7 倍 → 数值奇异.
+        // 对角噪声: 位置宽松 (让观测主导), 速度收紧 (防止随机游走累积发散)
+        // σ_pos=0.32, σ_vel=0.01 → cond(Q)=1000, 1800帧后累积σ_v≈0.42m/s
         Eigen::MatrixXd Qt = Eigen::MatrixXd::Zero(6, 6);
-        double q_pp = std::pow(dt, 4) / 4 * s2qxy_;
-        double q_pv = std::pow(dt, 3) / 2 * s2qxy_;
-        double q_vv = std::pow(dt, 2) * s2qvel_;  // 独立速度噪声
-        Qt(0, 0) = q_pp; Qt(0, 1) = q_pv; Qt(1, 0) = q_pv; Qt(1, 1) = q_vv;
-        Qt(2, 2) = q_pp; Qt(2, 3) = q_pv; Qt(3, 2) = q_pv; Qt(3, 3) = q_vv;
-        double q_pp_z = std::pow(dt, 4) / 4 * s2qz_;
-        double q_pv_z = std::pow(dt, 3) / 2 * s2qz_;
-        Qt(4, 4) = q_pp_z; Qt(4, 5) = q_pv_z;
-        Qt(5, 4) = q_pv_z; Qt(5, 5) = std::pow(dt, 2) * s2qvel_;
+        Qt(0, 0) = s2qxy_;   Qt(1, 1) = s2qvel_;
+        Qt(2, 2) = s2qxy_;   Qt(3, 3) = s2qvel_;
+        Qt(4, 4) = s2qz_;    Qt(5, 5) = s2qvel_;
         optimizer_->addMotionFactor<TranslationModel>("pos_vel", TranslationModel(dt), Qt);
 
-        // yaw_vyaw: yaw model (2D), yaw噪声用 s2qyaw_, vyaw 用独立 s2qvyaw_
+        // yaw_vyaw: 对角噪声, 同样 yaw 宽松 vyaw 收紧
         Eigen::MatrixXd Qy = Eigen::MatrixXd::Zero(2, 2);
-        Qy(0, 0) = std::pow(dt, 4) / 4 * s2qyaw_;
-        Qy(0, 1) = std::pow(dt, 3) / 2 * s2qyaw_;
-        Qy(1, 0) = Qy(0, 1);
-        Qy(1, 1) = std::pow(dt, 2) * s2qvyaw_;  // 独立 vyaw 噪声
+        Qy(0, 0) = s2qyaw_;  Qy(1, 1) = s2qvyaw_;
         optimizer_->addMotionFactor<YawModel>("yaw_vyaw", YawModel(dt), Qy);
     } else {
         optimizer_->predict<ArmorCVMotionModel>(dt, Q);
@@ -192,6 +202,19 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
         auto k_radius = optimizer_->key("radius", 0);
         auto k_dz = optimizer_->key("dz", 0);
 
+        // ── 速度平滑正则化 (对齐 jlu VelocityFactor/VyawFactor) ──
+        // 提供额外的因子冗余, 改善 6D 密集团的计算条件
+        gtsam::Key k_pos_prev = optimizer_->key("pos_vel", fid - 1);
+        optimizer_->addCustomFactor<VelSmoothFactor>(
+            k_pos_prev, k_pos_vel,
+            gtsam::noiseModel::Diagonal::Sigmas(
+                gtsam::Vector3(vel_sigma_, vel_sigma_, vel_sigma_)));
+
+        gtsam::Key k_yaw_prev = optimizer_->key("yaw_vyaw", fid - 1);
+        optimizer_->addCustomFactor<VyawSmoothFactor>(
+            k_yaw_prev, k_yaw_vyaw,
+            gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(vyaw_sigma_)));
+
         // 装甲板角点局部坐标 (与 armor_simulation 一致)
         // autoaim 约定: X=前(法向), Y=左(宽度), Z=上(高度)
         std::array<Eigen::Vector3d, 4> corners_local = {{
@@ -204,18 +227,17 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
             int idx = matchArmor(armor);
             gtsam::Key akey = optimizer_->armorPoseKey(fid, idx);
 
-            // ── Armor Pose3 初值: 从 PnP 观测直接获取 (camera 系) ──
-            // armor.position 在 odom 系, 转换到 camera 系
+            // ── Armor Pose3 初值: 从 PnP 观测提取 RPY (对齐 jlu) ──
             Eigen::Vector3d armor_pos_odom(armor.pose.position.x, armor.pose.position.y, armor.pose.position.z);
             Eigen::Vector3d armor_pos_camera = T_odom_to_camera * armor_pos_odom;
 
-            // 从 armor.yaw 计算旋转 (odom 系 → 转到 camera 系)
+            // 从 PnP 四元数提取完整 RPY (不用硬编码 pitch!)
             tf2::Quaternion q_armor_odom;
-            q_armor_odom.setRPY(0, 0.26, armor.yaw);  // pitch=0.26
+            tf2::fromMsg(armor.pose.orientation, q_armor_odom);
             Eigen::Quaterniond eq_armor_odom(q_armor_odom.w(), q_armor_odom.x(),
                                              q_armor_odom.y(), q_armor_odom.z());
-            Eigen::Quaterniond eq_armor_camera;
-            eq_armor_camera = T_odom_to_camera.rotation() * eq_armor_odom;
+            Eigen::Quaterniond eq_armor_camera(
+                T_odom_to_camera.rotation() * eq_armor_odom.toRotationMatrix());
 
             gtsam::Pose3 armor_pose_camera(
                 gtsam::Rot3::Quaternion(eq_armor_camera.w(), eq_armor_camera.x(),
@@ -239,8 +261,9 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
                 }
             }
 
-            // ── Armor Pose3 先验 (从 PnP) ──
-            gtsam::Vector6 prior_sig; prior_sig << 2.0, 2.0, 2.0, 2.0, 2.0, 2.0;
+            // ── Armor Pose3 先验 (从 PnP, 强化防止欠约束) ──
+            // σ=0.1 给 armor pose 足够的约束, 防止 iSAM2 报 "underconstrained"
+            gtsam::Vector6 prior_sig; prior_sig << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
             optimizer_->addPose3Prior(akey, armor_pose_camera,
                 gtsam::noiseModel::Diagonal::Sigmas(prior_sig));
 
@@ -250,7 +273,7 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
             optimizer_->addCustomFactor<ArmorCenterFactor>(
                 akey, k_pos_vel, k_yaw_vyaw, k_radius, k_dz,
                 gtsam::noiseModel::Diagonal::Sigmas(geo_sig), idx, T_camera_to_odom,
-                0.05, 0.80);
+                kGraphOptimizerRadiusMin, kGraphOptimizerRadiusMax);
         }
     } else {
         // YPD观测 (支持单板/双板)
@@ -349,7 +372,7 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
 
     // 发布结果
     publishResult();
-    publishMarkers();
+    publishMarkers(msg);
     publishTrackerTarget();
 
     // 打印状态（每10帧打印一次）
@@ -357,8 +380,8 @@ void GraphOptimizerTest::armorsCallback(const auto_aim_interfaces::msg::Armors::
     frame_count++;
     if (frame_count % 10 == 0) {
         Eigen::VectorXd state = optimizer_->getState();
-        double r1 = auto_graph::logisticFunction(state[8], 0.05, 0.80);
-        double r2 = auto_graph::logisticFunction(state[9], 0.05, 0.80);
+        double r1 = graphOptimizerRadiusFromState(state[8]);
+        double r2 = graphOptimizerRadiusFromState(state[9]);
         RCLCPP_INFO(get_logger(), "Frame %d: x=%.3f, y=%.3f, z=%.3f, yaw=%.3f, r1=%.3f, r2=%.3f, dz=%.3f",
                     frame_count, state[0], state[2], state[4], state[6], r1, r2, state[10]);
     }
@@ -379,23 +402,14 @@ void GraphOptimizerTest::initializeOptimizer(const auto_aim_interfaces::msg::Arm
     const auto& armor = msg->armors[0];
 
     double init_r_phys = 0.25;
-    double radius_min = 0.05, radius_max = 0.80;
-    double init_r_u = auto_graph::logisticInverse(init_r_phys, radius_min, radius_max);
+    double init_r_u = graphOptimizerRadiusToState(init_r_phys);
 
-    // 遍历所有可能的装甲板索引，选择使初始中心位置最一致的
-    double best_init_cost = std::numeric_limits<double>::max();
+    // 单块装甲板初始化时, 若初始 r1/r2 相等且 dz=0, 装甲板编号只能确定到
+    // π/2 等价类: center = armor_pos + r * [cos(armor_yaw), sin(armor_yaw)].
+    // 先把首个观测视为 index 0, 后续帧由 matchArmor() 维持连续编号。
     int best_init_idx = 0;
-    for (int i = 0; i < 4; i++) {
-        double robot_yaw = armor.yaw - i * M_PI_2;
-        double r = init_r_phys;
-        double rx = armor.pose.position.x + r * std::cos(armor.yaw);
-        double ry = armor.pose.position.y + r * std::sin(armor.yaw);
-        // 代价：中心位置应接近 (0, -5) 附近
-        double cost = rx * rx + (ry + 5.0) * (ry + 5.0);
-        if (cost < best_init_cost) { best_init_cost = cost; best_init_idx = i; }
-    }
     last_armor_index_ = best_init_idx;
-    double robot_yaw_init = armor.yaw - best_init_idx * M_PI_2;
+    double robot_yaw_init = armor.yaw;
 
     // 状态向量：[xc, v_xc, yc, v_yc, za, v_za, yaw, v_yaw, r1_u, r2_u, dz]
     Eigen::VectorXd x0 = Eigen::VectorXd::Zero(11);
@@ -413,11 +427,11 @@ void GraphOptimizerTest::initializeOptimizer(const auto_aim_interfaces::msg::Arm
 
     // 初始协方差
     Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(11, 11);
-    P0(0, 0) = P0(2, 2) = P0(4, 4) = 0.1;
-    P0(1, 1) = P0(3, 3) = P0(5, 5) = P0(7, 7) = 1.0;
+    P0(0, 0) = P0(2, 2) = P0(4, 4) = 0.01;    // σ_pos=0.1 (对齐 jlu)
+    P0(1, 1) = P0(3, 3) = P0(5, 5) = P0(7, 7) = 0.25;  // σ_vel=0.5 (对齐 jlu)
     P0(6, 6) = 0.05;
-    P0(8, 8) = P0(9, 9) = prior_noise_.radius * prior_noise_.radius;  // logistic 空间先验
-    P0(10, 10) = prior_noise_.dz * prior_noise_.dz;
+    P0(8, 8) = P0(9, 9) = 0.25;  // σ_radius=0.5 (对齐 jlu)
+    P0(10, 10) = 0.25;            // σ_dz=0.5 (对齐 jlu)
 
     optimizer_->initialize(layout, x0, P0);
 
@@ -432,7 +446,6 @@ int GraphOptimizerTest::matchArmor(const auto_aim_interfaces::msg::Armor& armor)
     double obs_z = armor.pose.position.z;
     Eigen::VectorXd state = optimizer_->getState();
 
-    double radius_min = 0.05, radius_max = 0.80;
     double best_cost = std::numeric_limits<double>::max();
     int best_index = last_armor_index_;
     for (int i = 0; i < 4; i++) {
@@ -442,7 +455,7 @@ int GraphOptimizerTest::matchArmor(const auto_aim_interfaces::msg::Armor& armor)
         if (yaw_diff > M_PI) yaw_diff = 2.0 * M_PI - yaw_diff;
 
         // logistic → physical radius
-        double r_phys = auto_graph::logisticFunction(state[8 + i % 2], radius_min, radius_max);
+        double r_phys = graphOptimizerRadiusFromState(state[8 + i % 2]);
         double dz = (i % 2 == 0) ? 0.0 : state[10];
         double pred_x = state[0] - std::cos(pred_yaw) * r_phys;
         double pred_y = state[2] - std::sin(pred_yaw) * r_phys;
@@ -489,9 +502,8 @@ void GraphOptimizerTest::publishTrackerTarget() {
     target.header.stamp = now();
     target.header.frame_id = "odom";
     Eigen::VectorXd state = optimizer_->getState();
-    double radius_min = 0.05, radius_max = 0.80;
-    double r1_phys = auto_graph::logisticFunction(state[8], radius_min, radius_max);
-    double r2_phys = auto_graph::logisticFunction(state[9], radius_min, radius_max);
+    double r1_phys = graphOptimizerRadiusFromState(state[8]);
+    double r2_phys = graphOptimizerRadiusFromState(state[9]);
 
     target.enemy.tracking = true;
     target.enemy.position.x = state[0];
@@ -510,61 +522,83 @@ void GraphOptimizerTest::publishTrackerTarget() {
     tracker_target_pub_->publish(target);
 }
 
-void GraphOptimizerTest::publishMarkers() {
-    visualization_msgs::msg::MarkerArray markers;
-    Eigen::VectorXd state = optimizer_->getState();
+void GraphOptimizerTest::publishMarkers(const auto_aim_interfaces::msg::Armors::SharedPtr& msg) {
+    auto state = optimizer_->getState();
+    double xc = state[0], yc = state[2], za = state[4];
+    double yaw = state[6], dz = state[10];
+    // 物理半径 (预先从 logistic 空间转换, 参考 jlu_tracker_node)
+    double r1 = graphOptimizerRadiusFromState(state[8]);
+    double r2 = graphOptimizerRadiusFromState(state[9]);
 
-    // 位置标记
-    visualization_msgs::msg::Marker position_marker;
-    position_marker.header.stamp = now();
-    position_marker.header.frame_id = "odom";
-    position_marker.ns = "position";
-    position_marker.id = 0;
-    position_marker.type = visualization_msgs::msg::Marker::SPHERE;
-    position_marker.action = visualization_msgs::msg::Marker::ADD;
-    position_marker.pose.position.x = state[0];
-    position_marker.pose.position.y = state[2];
-    position_marker.pose.position.z = state[4];
-    position_marker.scale.x = position_marker.scale.y = position_marker.scale.z = 0.1;
-    position_marker.color.a = 1.0;
-    position_marker.color.r = 0.0;
-    position_marker.color.g = 1.0;
-    position_marker.color.b = 0.0;
-    markers.markers.push_back(position_marker);
+    auto markers = std::make_unique<visualization_msgs::msg::MarkerArray>();
+    auto ts = now();
 
-    // 装甲板标记
-    double radius_min_m = 0.15, radius_max_m = 0.40;
-    for (int i = 0; i < 4; i++) {
-        visualization_msgs::msg::Marker armor_marker;
-        armor_marker.header.stamp = now();
-        armor_marker.header.frame_id = "odom";
-        armor_marker.ns = "armors";
-        armor_marker.id = i;
-        armor_marker.type = visualization_msgs::msg::Marker::CUBE;
-        armor_marker.action = visualization_msgs::msg::Marker::ADD;
+    // ── 位置标记 (绿色球) ──
+    visualization_msgs::msg::Marker pm;
+    pm.header.stamp = ts; pm.header.frame_id = "odom";
+    pm.ns = "position"; pm.id = 0;
+    pm.type = visualization_msgs::msg::Marker::SPHERE;
+    pm.action = visualization_msgs::msg::Marker::ADD;
+    pm.lifetime = rclcpp::Duration::from_seconds(0.1);
+    pm.pose.position.x = xc; pm.pose.position.y = yc;
+    pm.pose.position.z = za + dz / 2;
+    pm.scale.x = pm.scale.y = pm.scale.z = 0.1;
+    pm.color.a = 1.0; pm.color.r = 0.0; pm.color.g = 1.0; pm.color.b = 0.0;
+    markers->markers.push_back(pm);
 
-        double yaw = state[6] + i * M_PI_2;
-        double r = auto_graph::logisticFunction(state[8 + i % 2], radius_min_m, radius_max_m);
-        armor_marker.pose.position.x = state[0] - r * std::cos(yaw);
-        armor_marker.pose.position.y = state[2] - r * std::sin(yaw);
-        armor_marker.pose.position.z = state[4] + (i % 2) * state[10];
-
-        tf2::Quaternion q;
-        q.setRPY(0, 0.26, yaw);
-        armor_marker.pose.orientation = tf2::toMsg(q);
-
-        armor_marker.scale.x = 0.05;
-        armor_marker.scale.y = 0.135;
-        armor_marker.scale.z = 0.125;
-        armor_marker.color.a = 1.0;
-        armor_marker.color.r = 0.0;
-        armor_marker.color.g = 1.0;
-        armor_marker.color.b = 0.0;
-
-        markers.markers.push_back(armor_marker);
+    // ── DELETE 旧 marker (armors_pred + armors_obs) ──
+    for (auto* ns : {"armors_pred", "armors_obs"}) {
+        for (int i = 0; i < 4; i++) {
+            visualization_msgs::msg::Marker del;
+            del.header.stamp = ts; del.header.frame_id = "odom";
+            del.ns = ns; del.id = i;
+            del.action = visualization_msgs::msg::Marker::DELETE;
+            markers->markers.push_back(del);
+        }
     }
 
-    marker_pub_->publish(markers);
+    // ── 追踪器预测的 4 块装甲板 (蓝色) ──
+    for (int i = 0; i < 4; i++) {
+        double ay = yaw + i * M_PI_2;
+        double r = (i % 2 == 0) ? r1 : r2;
+        double dzi = (i % 2 == 0) ? 0.0 : dz;
+
+        visualization_msgs::msg::Marker am;
+        am.header.stamp = ts; am.header.frame_id = "odom";
+        am.ns = "armors_pred"; am.id = i;
+        am.type = visualization_msgs::msg::Marker::CUBE;
+        am.action = visualization_msgs::msg::Marker::ADD;
+        am.lifetime = rclcpp::Duration::from_seconds(0.1);
+        am.pose.position.x = xc - r * std::cos(ay);
+        am.pose.position.y = yc - r * std::sin(ay);
+        am.pose.position.z = za + dzi;
+        tf2::Quaternion q; q.setRPY(0, 15.0 * M_PI / 180.0, ay);
+        am.pose.orientation = tf2::toMsg(q);
+        am.scale.x = 0.005; am.scale.y = 0.135; am.scale.z = 0.125;
+        am.color.a = 1.0; am.color.r = 0.0; am.color.g = 0.5; am.color.b = 1.0;
+        markers->markers.push_back(am);
+    }
+
+    // ── 检测器观测装甲板 (红色) ──
+    for (size_t i = 0; i < msg->armors.size(); i++) {
+        const auto& obs = msg->armors[i];
+        visualization_msgs::msg::Marker am;
+        am.header.stamp = ts; am.header.frame_id = "odom";
+        am.ns = "armors_obs"; am.id = static_cast<int>(i);
+        am.type = visualization_msgs::msg::Marker::CUBE;
+        am.action = visualization_msgs::msg::Marker::ADD;
+        am.lifetime = rclcpp::Duration::from_seconds(0.1);
+        am.pose.position.x = obs.pose.position.x;
+        am.pose.position.y = obs.pose.position.y;
+        am.pose.position.z = obs.pose.position.z;
+        // 直接使用 PnP yaw (已修正共面双解歧义), 避免 atan2 在 π 附近跳变
+        am.pose.orientation = tf2::toMsg(observedArmorMarkerQuaternion(obs.yaw));
+        am.scale.x = 0.005; am.scale.y = 0.135; am.scale.z = 0.125;
+        am.color.a = 1.0; am.color.r = 1.0; am.color.g = 0.0; am.color.b = 0.0;
+        markers->markers.push_back(am);
+    }
+
+    marker_pub_->publish(std::move(markers));
 }
 
 }  // namespace filter_test

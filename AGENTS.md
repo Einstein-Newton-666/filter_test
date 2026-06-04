@@ -71,18 +71,27 @@ C++17，GCC 11 (Ubuntu 22.04)。
 `gimbal_simulation` 读取 `use_ground_truth_tracking: true` 来绕过跟踪器闭环，
 直接从 GroundTruth 话题驱动。
 
+## 仿真/PnP/可视化约定
+
+- 装甲板局部坐标：`X=法线, Y=宽度, Z=高度`；角点顺序 `[左下, 左上, 右上, 右下]`
+- 仿真几何：`pos = center - r * [cos(armor_yaw), sin(armor_yaw)]`；marker/观测 pitch 统一为 `+15°`
+- `CameraModel::estimatePose()` 使用 OpenCV `SOLVEPNP_IPPE`。IPPE 仍可能有两个相近平面候选；
+  仿真侧用 `correctPlanarPnPAmbiguity()` 按 yaw 先验修正分支，并在 `success=false` 时跳过观测
+- 像素噪声：U 形距离模型 + 装甲板级相关噪声
+  `p_i' = p_i + n_c + n_i`，`pixel_noise_common_ratio` 越大，四角点共同平移越多，PnP yaw 越稳
+
 ## 配置文件 (修改这些，而不是头文件默认值)
 
 - `src/filter_test/config/config.yaml` — `/filter` (CV/Singer、EKF/UKF、R 参数) 和
-  `/graph_optimizer_test` (观测模式、像素 σ、几何噪声、相机内参)
+  `/graph_optimizer_test` (观测模式、像素 σ、几何噪声、`vel_sigma/vyaw_sigma`、相机内参)
 - `src/armor_simulation/config/simulation_config.yaml` — 初始状态、运动限制、几何参数、
-  像素噪声 U 形模型、离群点、相机内参
+  像素噪声 U 形模型、`pixel_noise_common_ratio`、离群点、相机内参
 
 ## 已知问题 (未经重新调参请勿"修复")
 
-- `r2` (奇数装甲板半径) 过冲 — 需要独立的 `VelocityFactor` (尚未实现；通过
-  `s2qvel` 进行速度正则化是部分替代方案)
-- `yaw` 按标量处理 — 没有 SO(2) 角度环绕
+- `r2` (奇数装甲板半径) 过冲仍需调参；当前 2D 图优化已有
+  `VelSmoothFactor` / `VyawSmoothFactor`，但半径仍依赖几何因子和观测质量
+- `yaw` 在传统滤波路径仍按标量处理；图优化 `ArmorCenterFactor` 已对 yaw residual 做包裹
 - 装甲板匹配使用启发式代价，而非马氏距离
 - UKF 收敛速度比 EKF 慢
 - Singer 模型在某些参数下可能产生 NaN

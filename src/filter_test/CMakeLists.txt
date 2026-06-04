@@ -44,7 +44,7 @@ ${PROJECT_NAME}__rosidl_typesupport_cpp
 )
 
 
-# 图优化测试节点
+# 图优化测试节点 (旧 auto_graph_optimizer 框架)
 ament_auto_add_executable(graph_optimizer_test src/graph_optimizer_test.cpp)
 target_include_directories(graph_optimizer_test PUBLIC
 ${EIGEN3_INCLUDE_DIR}
@@ -53,6 +53,26 @@ ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
 )
 target_link_libraries(graph_optimizer_test
 ${PROJECT_NAME}__rosidl_typesupport_cpp
+gtsam
+TBB::tbb
+)
+
+# jlu tracker 独立节点 (移植自 jlu_vision_26)
+ament_auto_add_executable(jlu_tracker
+  src/jlu_tracker_node.cpp
+  src/jlu_tracker/types.cpp
+  src/jlu_tracker/factors.cpp
+  src/jlu_tracker/target.cpp
+)
+target_include_directories(jlu_tracker PUBLIC
+${EIGEN3_INCLUDE_DIR}
+${GTSAM_INCLUDE_DIR}
+${OpenCV_INCLUDE_DIRS}
+${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+target_link_libraries(jlu_tracker
+${PROJECT_NAME}__rosidl_typesupport_cpp
+${OpenCV_LIBS}
 gtsam
 TBB::tbb
 )
@@ -77,6 +97,12 @@ if(BUILD_TESTING)
   target_include_directories(test_auto_graph_optimizer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
+    ${EIGEN3_INCLUDE_DIR}
+    ${GTSAM_INCLUDE_DIR}
+  )
+  target_link_libraries(test_auto_graph_optimizer
+    gtsam
+    TBB::tbb
   )
 endif()
 

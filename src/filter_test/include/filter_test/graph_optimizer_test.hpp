@@ -10,6 +10,7 @@
 #include "filter_test/auto_graph_optimizer/models/motion_model.hpp"
 #include "filter_test/auto_graph_optimizer/models/measure_model.hpp"
 #include "filter_test/auto_graph_optimizer/utils/helpers.hpp"
+#include "filter_test/visualization_marker_utils.hpp"
 
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -62,7 +63,7 @@ private:
     /**
      * 发布可视化标记
      */
-    void publishMarkers();
+    void publishMarkers(const auto_aim_interfaces::msg::Armors::SharedPtr& msg);
 
     // 图优化器
     std::unique_ptr<auto_graph::GraphOptimizer> optimizer_;
@@ -86,6 +87,10 @@ private:
     // 速度平滑噪声 (2D观测模式)
     double s2qvel_ = 0.1;
     double s2qvyaw_ = 0.1;
+
+    // 速度正则化 sigma (对齐 jlu VelocityFactor / VyawFactor)
+    double vel_sigma_ = 0.01;
+    double vyaw_sigma_ = 0.05;
 
     // 观测噪声 (YPD)
     double r_pose_ = 0.01;
@@ -242,6 +247,25 @@ struct ArmorCVMeasureYPDDouble : auto_graph::MeasureModel<ArmorCVMeasureYPDDoubl
     }
 };
 
+inline Eigen::Vector3d rotationMatrixToRPY(const Eigen::Matrix3d& R) {
+    double pitch = std::asin(std::max(-1.0, std::min(1.0, -R(2, 0))));
+    double roll = std::atan2(R(2, 1), R(2, 2));
+    double yaw = std::atan2(R(1, 0), R(0, 0));
+    return {roll, pitch, yaw};
+}
+
+inline constexpr double kGraphOptimizerRadiusMin = 0.10;
+inline constexpr double kGraphOptimizerRadiusMax = 0.60;
+
+inline double graphOptimizerRadiusFromState(double radius_u) {
+    return auto_graph::logisticFunction(
+        radius_u, kGraphOptimizerRadiusMin, kGraphOptimizerRadiusMax);
+}
+
+inline double graphOptimizerRadiusToState(double radius) {
+    return auto_graph::logisticInverse(
+        radius, kGraphOptimizerRadiusMin, kGraphOptimizerRadiusMax);
+}
 
 }  // namespace filter_test
 
@@ -336,7 +360,7 @@ struct ArmorCenterFactor : gtsam::NoiseModelFactor5<
         Eigen::Isometry3d armor_pose_odom = T_camera_to_odom_ * pose;
 
         Eigen::Vector3d armor_position = armor_pose_odom.translation();
-        Eigen::Vector3d rpy = armor_pose_odom.rotation().eulerAngles(0, 1, 2);
+        Eigen::Vector3d rpy = filter_test::rotationMatrixToRPY(armor_pose_odom.rotation().matrix());
         double armor_yaw = rpy.z();
 
         // logistic 半径
@@ -358,9 +382,9 @@ struct ArmorCenterFactor : gtsam::NoiseModelFactor5<
         double tangential_err = tx * dx + ty * dy;
         double radial_err = nx * dx + ny * dy - r;
         double z_err = center_z - armor_position.z() + dz;
-        // yaw_err: armor_yaw vs predicted_yaw = center_yaw + I*π/2
+        // yaw_err: 使用角度包裹 (对齐 jlu Rot2::localCoordinates)
         double pred_armor_yaw = center_yaw + armor_index_ * M_PI_2;
-        double yaw_err = armor_yaw - pred_armor_yaw;
+        double yaw_err = std::remainder(armor_yaw - pred_armor_yaw, 2.0 * M_PI);
 
         gtsam::Vector4 err(tangential_err, radial_err, z_err, yaw_err);
 
@@ -375,7 +399,7 @@ struct ArmorCenterFactor : gtsam::NoiseModelFactor5<
             // d(err)/d(armor_yaw angle psi)
             double radial_proj = nx * dx + ny * dy;
             Eigen::Matrix<double, 4, 1> d_e_d_psi;
-            d_e_d_psi << -radial_proj, tangential_err, 0.0, -1.0;
+            d_e_d_psi << -radial_proj, tangential_err, 0.0, 1.0;
             // d(psi)/d(omega) — right-multiply perturbation: body-frame omega → yaw change
             double roll = rpy.x(), pitch = rpy.y();
             double cos_pitch = std::cos(pitch);
@@ -406,6 +430,77 @@ struct ArmorCenterFactor : gtsam::NoiseModelFactor5<
         if (H5) {
             H5->setZero(4, 1);
             if (armor_index_ % 2 == 1) (*H5)(2, 0) = 1.0;  // z / d(dz)
+        }
+        return err;
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// VelSmoothFactor — 速度平滑因子 (参考 jlu_vision_26 VelocityFactor)
+//   2-key: pos_vel(k-1) → pos_vel(k)
+//   仅约束速度分量 [vxc, vyc, vza] 的帧间变化
+//   解决 CWNA 运动模型下速度分量欠约束的问题
+// ═══════════════════════════════════════════════════
+struct VelSmoothFactor : gtsam::NoiseModelFactor2<gtsam::Vector, gtsam::Vector> {
+    using Base = gtsam::NoiseModelFactor2<gtsam::Vector, gtsam::Vector>;
+
+    VelSmoothFactor(gtsam::Key k_prev, gtsam::Key k_cur,
+                    const gtsam::SharedNoiseModel& noise)
+        : Base(noise, k_prev, k_cur) {}
+
+    gtsam::Vector evaluateError(
+        const gtsam::Vector& x1, const gtsam::Vector& x2,
+        gtsam::Matrix* H1, gtsam::Matrix* H2) const override {
+        // pos_vel = 6D: [xc, vxc, yc, vyc, za, vza]
+        // error = 3D: [Δvxc, Δvyc, Δvza]
+        gtsam::Vector3 err;
+        err(0) = x2[1] - x1[1];
+        err(1) = x2[3] - x1[3];
+        err(2) = x2[5] - x1[5];
+
+        if (H1) {
+            H1->setZero(3, 6);
+            (*H1)(0, 1) = -1.0;
+            (*H1)(1, 3) = -1.0;
+            (*H1)(2, 5) = -1.0;
+        }
+        if (H2) {
+            H2->setZero(3, 6);
+            (*H2)(0, 1) = 1.0;
+            (*H2)(1, 3) = 1.0;
+            (*H2)(2, 5) = 1.0;
+        }
+        return err;
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// VyawSmoothFactor — yaw 速度平滑因子 (参考 jlu_vision_26 VyawFactor)
+//   2-key: yaw_vyaw(k-1) → yaw_vyaw(k)
+//   仅约束 vyaw 的帧间变化
+// ═══════════════════════════════════════════════════
+struct VyawSmoothFactor : gtsam::NoiseModelFactor2<gtsam::Vector, gtsam::Vector> {
+    using Base = gtsam::NoiseModelFactor2<gtsam::Vector, gtsam::Vector>;
+
+    VyawSmoothFactor(gtsam::Key k_prev, gtsam::Key k_cur,
+                     const gtsam::SharedNoiseModel& noise)
+        : Base(noise, k_prev, k_cur) {}
+
+    gtsam::Vector evaluateError(
+        const gtsam::Vector& x1, const gtsam::Vector& x2,
+        gtsam::Matrix* H1, gtsam::Matrix* H2) const override {
+        // yaw_vyaw = 2D: [yaw, vyaw]
+        // error = 1D: Δvyaw
+        gtsam::Vector1 err;
+        err(0) = x2[1] - x1[1];
+
+        if (H1) {
+            H1->setZero(1, 2);
+            (*H1)(0, 1) = -1.0;
+        }
+        if (H2) {
+            H2->setZero(1, 2);
+            (*H2)(0, 1) = 1.0;
         }
         return err;
     }

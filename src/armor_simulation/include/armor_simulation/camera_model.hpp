@@ -92,6 +92,16 @@ public:
      * 从带噪像素角点求解 3D 位姿，保证 pixel ↔ pose 一致性。
      * 噪声从像素自然传播到位姿，无需独立参数。
      *
+     * 投影模型:
+     *   s [u, v, 1]^T = K [R | t] X
+     * 其中 X 是装甲板局部 3D 点, [u, v] 是像素角点.
+     *
+     * 注意: 装甲板 4 点共面, 平面 PnP 天然存在两个相近姿态候选。
+     * IPPE (Infinitesimal Plane-based Pose Estimation) 会针对平面点给出
+     * 重投影误差排序后的解；OpenCV solvePnP(IPPE) 返回其中一个,
+     * solvePnPGeneric(IPPE) 可返回两个候选。噪声较大时两个候选误差接近,
+     * 仍需要上层用 yaw 先验/连续性处理双解歧义。
+     *
      * @param image_points  4个带噪像素角点
      * @param armor_width   装甲板宽度 (m)
      * @param armor_height  装甲板高度 (m)
@@ -100,26 +110,42 @@ public:
     struct PnPResult {
         Eigen::Vector3d position_odom;
         Eigen::Quaterniond orientation_odom;
+        bool success = false;
     };
 
     PnPResult estimatePose(
         const std::array<Eigen::Vector2d, 4>& image_points,
         double armor_width, double armor_height) const
     {
-        // 装甲板 3D 模型点 (局部坐标系，与 computeArmorCorners 一致)
+        // 装甲板 3D 模型点 (X=法向, Y=宽度, Z=高度, 对齐 autoaim)
         double hw = armor_width / 2.0;
         double hh = armor_height / 2.0;
         std::vector<cv::Point3d> obj_pts = {
-            {-hw, 0, -hh},  // 左下
-            {-hw, 0,  hh},  // 左上
-            { hw, 0,  hh},  // 右上
-            { hw, 0, -hh}   // 右下
+            {0, -hw, -hh},  // 左下
+            {0, -hw,  hh},  // 左上
+            {0,  hw,  hh},  // 右上
+            {0,  hw, -hh}   // 右下
         };
 
         // 图像点
         std::vector<cv::Point2d> img_pts;
         for (int i = 0; i < 4; i++) {
             img_pts.emplace_back(image_points[i].x(), image_points[i].y());
+        }
+
+        double image_area = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            int j = (i + 1) % 4;
+            image_area += image_points[i].x() * image_points[j].y();
+            image_area -= image_points[j].x() * image_points[i].y();
+        }
+        image_area = std::abs(image_area) * 0.5;
+        PnPResult result;
+        if (image_area < 1.0) {
+            result.position_odom.setZero();
+            result.orientation_odom.setIdentity();
+            result.success = false;
+            return result;
         }
 
         // 内参矩阵
@@ -133,11 +159,26 @@ public:
             intr_.k1, intr_.k2, intr_.p1, intr_.p2, 0);
 
         cv::Mat rvec, tvec;
-        cv::solvePnP(obj_pts, img_pts, K, dist, rvec, tvec,
-                     false, cv::SOLVEPNP_ITERATIVE);
+        // IPPE: 专为共面点设计的解析平面 PnP. 它比 ITERATIVE 更适合装甲板平面,
+        // 但不是“消除双解”：平面目标仍可能有两组姿态候选, 此处只取 OpenCV
+        // 按重投影误差选择的一个解, 后续由 correctPlanarPnPAmbiguity() 用 yaw 先验修正.
+        bool ok = cv::solvePnP(obj_pts, img_pts, K, dist, rvec, tvec,
+                               false, cv::SOLVEPNP_IPPE);
+        if (!ok || tvec.empty() || rvec.empty()) {
+            result.position_odom.setZero();
+            result.orientation_odom.setIdentity();
+            result.success = false;
+            return result;
+        }
 
         // 相机系位置
         Eigen::Vector3d pos_cam(tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
+        if (!pos_cam.allFinite()) {
+            result.position_odom.setZero();
+            result.orientation_odom.setIdentity();
+            result.success = false;
+            return result;
+        }
 
         // 相机系朝向 (Rodrigues → rotation matrix → quaternion)
         cv::Mat rot_mat;
@@ -152,9 +193,9 @@ public:
         Eigen::Matrix3d R = getRotation();
         Eigen::Vector3d t(T_camera_odom_(0, 3), T_camera_odom_(1, 3), T_camera_odom_(2, 3));
 
-        PnPResult result;
         result.position_odom = R.transpose() * (pos_cam - t);
         result.orientation_odom = Eigen::Quaterniond(R.transpose() * R_cam);
+        result.success = true;
         return result;
     }
 
