@@ -92,6 +92,13 @@ src/
 │   │   │   └── utils/
 │   │   │       ├── helpers.hpp            # logistic 函数, 角度工具
 │   │   │       └── types.hpp              # 类型定义
+│   │   ├── graph_optimizer/       # graph_optimizer_test 内部 tracker core
+│   │   │   ├── tracker_core.hpp           # ArmorGraphTracker: init/match/build/solve
+│   │   │   ├── observation_backend.hpp    # 2D/YPD 观测后端接口
+│   │   │   ├── factors.hpp                # ArmorReproj/Center/Smooth 因子
+│   │   │   ├── motion_models.hpp          # 2D/YPD 模式使用的 CRTP 模型
+│   │   │   ├── tracker_math.hpp           # 半径、yaw、几何/匹配工具
+│   │   │   └── tracker_types.hpp          # tracker 输入/输出/配置结构
 │   │   ├── filters/               # 传统滤波器
 │   │   │   ├── kalman_filter.hpp          # KF 模板基类 <N_X, N_Z>
 │   │   │   ├── extended_kalman.hpp        # EKF (Ceres autodiff)
@@ -100,11 +107,12 @@ src/
 │   │   │   └── singer_model.hpp          # Singer 模型 (15D)
 │   │   ├── filter.hpp            # ArmorFilter 业务逻辑类
 │   │   ├── filter_test.hpp        # ArmorTest ROS2 节点
-│   │   ├── graph_optimizer_test.hpp       # GraphOptimizerTest + 因子定义
+│   │   ├── graph_optimizer_test.hpp       # GraphOptimizerTest ROS 节点外壳 + 兼容别名
 │   │   └── common.hpp            # 枚举 / 角度工具
 │   └── src/
 │       ├── filter.cpp            # 传统滤波器入口
-│       └── graph_optimizer_test.cpp       # 图优化入口
+│       ├── graph_optimizer/      # tracker core / backend 源文件
+│       └── graph_optimizer_test.cpp       # 图优化 ROS 节点入口
 │
 └── auto_aim_interfaces/           # 消息定义 (Armors, Armor, TrackerTarget 等)
 ```
@@ -129,6 +137,13 @@ src/
 - `AutoMotionFactor` — 全状态 2-key 运动因子 (autodiff, 兼容 YPD 模式)
 - `AutoMeasureFactor` — 全状态 N-key 观测因子 (autodiff)
 - 2D 模式额外有 `VelSmoothFactor` / `VyawSmoothFactor`，由 `vel_sigma` / `vyaw_sigma` 控制速度平滑
+
+**`graph_optimizer_test` 节点结构**：
+- `GraphOptimizerTest` (`graph_optimizer_test.cpp/.hpp`) 只负责参数、订阅、TF、发布，外部 executable/node/topic/参数 namespace 保持不变
+- `ArmorGraphTracker` (`graph_optimizer/tracker_core.hpp`) 持有 `auto_graph::GraphOptimizer`，管理初始化、frame id、装甲板匹配、运动因子、观测因子和 solve
+- `ObservationBackend` (`graph_optimizer/observation_backend.hpp`) 隔离两种观测路径；`PixelObservationBackend` 添加 Pose3 初值、角点重投影、中心几何和速度平滑因子，`YpdObservationBackend` 保留单板/双板 YPD 观测
+- `tracker_math.hpp` 中的 `matchArmorIndicesUnique()` 保证单帧最多 4 个有效装甲板 index；超出的观测标为 `-1`，2D 后端跳过以避免重复 Pose3 key
+- `GraphOptimizer::solve()` 返回 `SolveResult`：冷启动为 `cold_start=true, optimized=false` 且继续累计因子；iSAM2 异常为 `failed=true` 并清空本轮增量图。`TrackerUpdateResult::solved` 表示该帧可按兼容策略发布，`solve_failed=true` 的帧不发布目标/marker。
 
 两级像素观测 (对齐 jlu_vision_26)：
 - **第一级**: `ArmorReprojFactor` — 1-key Pose3(camera 系) → 2D 像素误差 (每角点), GTSAM Cal3DS2 投影+畸变

@@ -4,9 +4,15 @@
 #include <vector>
 #include <cmath>
 #include <memory>
+#include <set>
 #include <utility>
 
+#include <gtsam/nonlinear/PriorFactor.h>
+
+#include "filter_test/auto_graph_optimizer/models/motion_model.hpp"
+#include "filter_test/graph_optimizer/motion_models.hpp"
 #include "filter_test/graph_optimizer_test.hpp"
+#include "filter_test/graph_optimizer/tracker_core.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
 
 // 注意：由于GTSAM未安装C++版本，此测试仅验证不依赖GTSAM的部分
@@ -345,8 +351,137 @@ TEST(ArmorCenterFactorTest, YawJacobianMatchesFiniteDifference) {
     EXPECT_NEAR(H1(3, 2), numeric, 1e-5);
 }
 
+namespace {
+
+struct Identity1DMotionModel : auto_graph::MotionModel<Identity1DMotionModel, 1> {
+    explicit Identity1DMotionModel(double) {}
+
+    template<typename T>
+    void operator()(const T& x, T& x_next) const {
+        x_next[0] = x[0];
+    }
+};
+
+auto_graph::GraphOptimizer makeSingleVariableOptimizer(int cold_start_frames) {
+    auto_graph::GraphOptimizerConfig config;
+    config.cold_start_frames = cold_start_frames;
+    config.verbose = false;
+    auto_graph::GraphOptimizer optimizer(config);
+
+    auto layout = auto_graph::VariableLayout(1).addDynamic("x", {0});
+    Eigen::VectorXd x0(1);
+    x0 << 0.0;
+    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(1, 1);
+    optimizer.initialize(layout, x0, P0);
+    return optimizer;
+}
+
+auto_graph::GraphOptimizer makeWindowResetOptimizer() {
+    auto_graph::GraphOptimizerConfig config;
+    config.cold_start_frames = 0;
+    config.max_window_frames = 1;
+    config.smoother_lag = 0.0;
+    config.verbose = false;
+    auto_graph::GraphOptimizer optimizer(config);
+
+    auto layout = auto_graph::VariableLayout(1).addDynamic("x", {0});
+    Eigen::VectorXd x0(1);
+    x0 << 0.0;
+    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(1, 1);
+    optimizer.initialize(layout, x0, P0);
+    return optimizer;
+}
+
+}  // namespace
+
+TEST(GraphOptimizerSolveResultTest, UninitializedOptimizerReportsNoAttempt) {
+    auto_graph::GraphOptimizer optimizer;
+
+    auto result = optimizer.solve();
+
+    EXPECT_EQ(result.frame_id, 0u);
+    EXPECT_FALSE(result.attempted);
+    EXPECT_FALSE(result.optimized);
+    EXPECT_FALSE(result.cold_start);
+    EXPECT_FALSE(result.failed);
+    EXPECT_TRUE(result.error_message.empty());
+}
+
+TEST(GraphOptimizerSolveResultTest, ColdStartReportsAccumulationWithoutFailure) {
+    auto optimizer = makeSingleVariableOptimizer(1);
+    optimizer.addCustomFactor<gtsam::PriorFactor<gtsam::Vector>>(
+        optimizer.key("x", 0),
+        gtsam::Vector1(0.0),
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(1.0)));
+
+    auto result = optimizer.solve();
+
+    EXPECT_EQ(result.frame_id, 0u);
+    EXPECT_FALSE(result.attempted);
+    EXPECT_FALSE(result.optimized);
+    EXPECT_TRUE(result.cold_start);
+    EXPECT_FALSE(result.failed);
+    EXPECT_TRUE(result.error_message.empty());
+}
+
+TEST(GraphOptimizerSolveResultTest, InvalidFactorReportsFailure) {
+    auto optimizer = makeSingleVariableOptimizer(0);
+    optimizer.addCustomFactor<gtsam::PriorFactor<gtsam::Pose3>>(
+        optimizer.key("x", 0),
+        gtsam::Pose3(),
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6::Ones()));
+
+    auto result = optimizer.solve();
+
+    EXPECT_EQ(result.frame_id, 0u);
+    EXPECT_TRUE(result.attempted);
+    EXPECT_FALSE(result.optimized);
+    EXPECT_FALSE(result.cold_start);
+    EXPECT_TRUE(result.failed);
+    EXPECT_FALSE(result.error_message.empty());
+}
+
+TEST(GraphOptimizerSolveResultTest, FrameIdReflectsWindowReset) {
+    auto optimizer = makeWindowResetOptimizer();
+    Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(1, 1) * 0.01;
+    optimizer.predict<Identity1DMotionModel>(0.01, Q);
+    ASSERT_EQ(optimizer.getFrameId(), 1u);
+
+    optimizer.addCustomFactor<gtsam::PriorFactor<gtsam::Vector>>(
+        optimizer.key("x", 1),
+        gtsam::Vector1(0.0),
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(1.0)));
+
+    auto result = optimizer.solve();
+
+    EXPECT_TRUE(result.optimized);
+    EXPECT_FALSE(result.failed);
+    EXPECT_EQ(optimizer.getFrameId(), 0u);
+    EXPECT_EQ(result.frame_id, optimizer.getFrameId());
+}
+
 TEST(GraphOptimizerVisualizationTest, RadiusConversionUsesTrackerRadiusBounds) {
     EXPECT_NEAR(filter_test::graphOptimizerRadiusFromState(0.0), 0.35, 1e-12);
+}
+
+TEST(GraphOptimizerYPDModelTest, SingleArmorUsesLogisticRadiusState) {
+    Eigen::VectorXd x = Eigen::VectorXd::Zero(11);
+    x[0] = 1.0;
+    x[2] = 0.0;
+    x[4] = 0.0;
+    x[6] = 0.0;
+    x[8] = filter_test::graph_optimizer::radiusToState(0.25);
+    x[9] = filter_test::graph_optimizer::radiusToState(0.40);
+
+    filter_test::graph_optimizer::ArmorCVMeasureYPD model(0);
+    const auto [z, H] = model.linearize(x);
+
+    EXPECT_EQ(H.rows(), 4);
+    EXPECT_EQ(H.cols(), 11);
+    EXPECT_NEAR(z[0], 0.0, 1e-12);
+    EXPECT_NEAR(z[1], 0.0, 1e-12);
+    EXPECT_NEAR(z[2], 0.75, 1e-12);
+    EXPECT_NEAR(z[3], 0.0, 1e-12);
 }
 
 TEST(GraphOptimizerVisualizationTest, ObservedArmorMarkerPitchMatchesSimulation) {
@@ -357,6 +492,213 @@ TEST(GraphOptimizerVisualizationTest, ObservedArmorMarkerPitchMatchesSimulation)
     EXPECT_NEAR(roll, 0.0, 1e-12);
     EXPECT_NEAR(pitch, 15.0 * M_PI / 180.0, 1e-12);
     EXPECT_NEAR(yaw, 0.0, 1e-12);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, PredictedArmorsUseCenterYawRadiusAndDz) {
+    filter_test::graph_optimizer::TrackerState state;
+    state.center << 1.0, 2.0, 0.5;
+    state.yaw = 0.0;
+    state.radius_1 = 0.3;
+    state.radius_2 = 0.4;
+    state.dz = 0.1;
+
+    auto armors = filter_test::graph_optimizer::predictedArmorsFromState(state);
+    ASSERT_EQ(armors.size(), 4u);
+
+    EXPECT_NEAR(armors[0].position.x(), 0.7, 1e-12);
+    EXPECT_NEAR(armors[0].position.y(), 2.0, 1e-12);
+    EXPECT_NEAR(armors[0].position.z(), 0.5, 1e-12);
+    EXPECT_NEAR(armors[1].position.x(), 1.0, 1e-12);
+    EXPECT_NEAR(armors[1].position.y(), 1.6, 1e-12);
+    EXPECT_NEAR(armors[1].position.z(), 0.6, 1e-12);
+    EXPECT_NEAR(armors[2].position.x(), 1.3, 1e-12);
+    EXPECT_NEAR(armors[2].position.y(), 2.0, 1e-12);
+    EXPECT_NEAR(armors[3].position.x(), 1.0, 1e-12);
+    EXPECT_NEAR(armors[3].position.y(), 2.4, 1e-12);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, MatchArmorKeepsYawContinuityAcrossPi) {
+    filter_test::graph_optimizer::TrackerState state;
+    state.center << 0.0, 0.0, 0.5;
+    state.yaw = M_PI - 0.05;
+    state.radius_1 = 0.3;
+    state.radius_2 = 0.4;
+    state.dz = 0.1;
+
+    auto pred = filter_test::graph_optimizer::predictedArmorsFromState(state).front();
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = pred.position.x();
+    obs.pose.position.y = pred.position.y();
+    obs.pose.position.z = pred.position.z();
+    obs.yaw = -M_PI + 0.03;
+
+    int matched = filter_test::graph_optimizer::matchArmorIndex(state, obs, -1);
+    EXPECT_EQ(matched, 0);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, CreatesRequestedObservationBackend) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.use_2d_observation = true;
+    auto pixel_backend = filter_test::graph_optimizer::createObservationBackend(config);
+    ASSERT_NE(pixel_backend, nullptr);
+    EXPECT_STREQ(pixel_backend->name(), "pixel");
+
+    config.use_2d_observation = false;
+    auto ypd_backend = filter_test::graph_optimizer::createObservationBackend(config);
+    ASSERT_NE(ypd_backend, nullptr);
+    EXPECT_STREQ(ypd_backend->name(), "ypd");
+}
+
+TEST(GraphOptimizerTrackerCoreTest, InitializationFrameIsAcceptedButNotSolved) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    filter_test::graph_optimizer::ArmorGraphTracker tracker(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    auto result = tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
+
+    EXPECT_TRUE(result.accepted_frame);
+    EXPECT_TRUE(result.initialized);
+    EXPECT_FALSE(result.solved);
+    EXPECT_FALSE(result.cold_start);
+    EXPECT_FALSE(result.solve_failed);
+    EXPECT_TRUE(result.solve_error.empty());
+}
+
+TEST(GraphOptimizerTrackerCoreTest, ColdStartFrameIsSolvedForPublishingCompatibility) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 1;
+    filter_test::graph_optimizer::ArmorGraphTracker tracker(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    (void)tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
+    auto result = tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
+
+    EXPECT_TRUE(result.accepted_frame);
+    EXPECT_TRUE(result.solved);
+    EXPECT_TRUE(result.cold_start);
+    EXPECT_FALSE(result.solve_failed);
+    EXPECT_TRUE(result.solve_error.empty());
+}
+
+TEST(GraphOptimizerTrackerCoreTest, MismatchedBackendInputFailsFrameWithoutSolve) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.use_2d_observation = true;
+    auto backend = filter_test::graph_optimizer::createObservationBackend(config);
+    auto optimizer = makeSingleVariableOptimizer(0);
+
+    auto_aim_interfaces::msg::Armors observations;
+    observations.armors.emplace_back();
+    Eigen::VectorXd predicted_state = Eigen::VectorXd::Zero(11);
+    std::vector<int> matched_indices;
+    filter_test::graph_optimizer::TrackerFrameContext context{
+        config,
+        observations,
+        Eigen::Isometry3d::Identity(),
+        predicted_state,
+        matched_indices,
+        0};
+
+    auto result = backend->addFrameFactors(optimizer, context);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error_message.find("matched_indices"), std::string::npos);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, MatchArmorsAssignsUniqueIndices) {
+    filter_test::graph_optimizer::TrackerState state;
+    state.center << 0.0, 0.0, 0.5;
+    state.yaw = 0.0;
+    state.radius_1 = 0.3;
+    state.radius_2 = 0.4;
+    state.dz = 0.1;
+
+    auto predicted = filter_test::graph_optimizer::predictedArmorsFromState(state);
+    auto_aim_interfaces::msg::Armors observations;
+    for (int i = 0; i < 2; ++i) {
+        auto_aim_interfaces::msg::Armor obs;
+        obs.pose.position.x = predicted[0].position.x() + 0.01 * i;
+        obs.pose.position.y = predicted[0].position.y();
+        obs.pose.position.z = predicted[0].position.z();
+        obs.yaw = predicted[0].yaw;
+        observations.armors.push_back(obs);
+    }
+
+    auto matched = filter_test::graph_optimizer::matchArmorIndicesUnique(
+        state, observations, -1);
+
+    ASSERT_EQ(matched.size(), 2u);
+    EXPECT_NE(matched[0], matched[1]);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, MatchArmorsMarksOverflowObservationsUnmatched) {
+    filter_test::graph_optimizer::TrackerState state;
+    state.center << 0.0, 0.0, 0.5;
+    state.yaw = 0.0;
+    state.radius_1 = 0.3;
+    state.radius_2 = 0.4;
+    state.dz = 0.1;
+
+    auto predicted = filter_test::graph_optimizer::predictedArmorsFromState(state);
+    auto_aim_interfaces::msg::Armors observations;
+    for (int i = 0; i < 5; ++i) {
+        auto_aim_interfaces::msg::Armor obs;
+        const auto& pred = predicted[static_cast<std::size_t>(i % 4)];
+        obs.pose.position.x = pred.position.x();
+        obs.pose.position.y = pred.position.y();
+        obs.pose.position.z = pred.position.z();
+        obs.yaw = pred.yaw;
+        observations.armors.push_back(obs);
+    }
+
+    auto matched = filter_test::graph_optimizer::matchArmorIndicesUnique(
+        state, observations, -1);
+
+    ASSERT_EQ(matched.size(), 5u);
+    std::set<int> valid_indices;
+    int unmatched_count = 0;
+    for (int idx : matched) {
+        if (idx < 0) {
+            ++unmatched_count;
+        } else {
+            valid_indices.insert(idx);
+        }
+    }
+    EXPECT_EQ(valid_indices.size(), 4u);
+    EXPECT_EQ(unmatched_count, 1);
+}
+
+TEST(GraphOptimizerFrameTimeTest, RejectedFrameDoesNotCommitTimestamp) {
+    filter_test::graph_optimizer::FrameTimeTracker tracker;
+    builtin_interfaces::msg::Time t0;
+    t0.sec = 10;
+    builtin_interfaces::msg::Time t1;
+    t1.sec = 11;
+    builtin_interfaces::msg::Time t2;
+    t2.sec = 12;
+
+    EXPECT_NEAR(tracker.computeDt(t0), 0.01, 1e-12);
+    tracker.commit(t0);
+
+    EXPECT_NEAR(tracker.computeDt(t1), 1.0, 1e-12);
+    // t1 is rejected before commit.
+
+    EXPECT_NEAR(tracker.computeDt(t2), 0.01, 1e-12);
+    tracker.commit(t2);
+    EXPECT_NEAR(tracker.computeDt(t2), 0.01, 1e-12);
 }
 
 // ==================== 测试异常值检测 ====================

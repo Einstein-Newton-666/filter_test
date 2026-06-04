@@ -14,6 +14,7 @@
 #include <memory>
 #include <iostream>
 #include <functional>
+#include <string>
 
 namespace auto_graph {
 
@@ -262,6 +263,15 @@ struct GraphOptimizerConfig {
     SmootherType smoother_type    = SmootherType::Incremental;  // 平滑器类型
     int    extra_iterations       = 0;   // 每次update后额外iSAM2迭代 (GTSAM示例使用2-3次)
     bool   verbose                = false;
+};
+
+struct SolveResult {
+    uint64_t frame_id = 0;
+    bool attempted = false;
+    bool optimized = false;
+    bool cold_start = false;
+    bool failed = false;
+    std::string error_message;
 };
 
 // ── SingleMotionFactor: 简化版 per-group 运动因子 ──
@@ -552,21 +562,24 @@ public:
 
     // ── 优化 ──
 
-    void solve() {
-        if (!initialized_ || graph_.empty()) return;
+    SolveResult solve() {
+        SolveResult result;
+        result.frame_id = frame_id_;
+        if (!initialized_ || graph_.empty()) return result;
 
         cold_start_count_++;
         frames_since_reset_++;
 
         // 冷启动: 前 N 帧只累积因子和初值, 不优化 (避免约束不足时发散)
         if (config_.cold_start_frames > 0 && cold_start_count_ <= config_.cold_start_frames) {
+            result.cold_start = true;
             if (config_.verbose) {
                 std::cout << "[GO] cold start " << cold_start_count_
                           << "/" << config_.cold_start_frames << std::endl;
             }
             // 不清空 graph_ 和 initial_values_, 让它们跨帧累积
             // 注意: 静态变量 key 不变, check exists 防止重复插入; 动态变量 key 每帧递增, 无冲突
-            return;
+            return result;
         }
 
         // 冷启动结束标记: 清空计数器, 后续不再进入此分支
@@ -582,6 +595,7 @@ public:
         }
 
         try {
+            result.attempted = true;
             if (!hasSmoother()) {
                 if (config_.smoother_lag <= 0) {
                     // 纯 ISAM2 (对齐 jlu, 无边际化)
@@ -639,6 +653,7 @@ public:
             }
             graph_.resize(0);
             initial_values_.clear();
+            result.optimized = true;
 
             if (config_.verbose) {
                 std::cout << "[GO] solved f=" << frame_id_
@@ -646,10 +661,15 @@ public:
                           << "] yaw=" << x_[6] << std::endl;
             }
         } catch (const std::exception& e) {
+            result.attempted = true;
+            result.failed = true;
+            result.error_message = e.what();
             std::cerr << "[GO] iSAM2 error f=" << frame_id_ << ": " << e.what() << std::endl;
             graph_.resize(0);
             initial_values_.clear();  // 同步清空, 避免下次重复 key
         }
+        result.frame_id = frame_id_;
+        return result;
     }
 
     // ── 查询 ──

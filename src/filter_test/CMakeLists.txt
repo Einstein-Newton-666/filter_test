@@ -45,7 +45,11 @@ ${PROJECT_NAME}__rosidl_typesupport_cpp
 
 
 # 图优化测试节点 (旧 auto_graph_optimizer 框架)
-ament_auto_add_executable(graph_optimizer_test src/graph_optimizer_test.cpp)
+ament_auto_add_executable(graph_optimizer_test
+  src/graph_optimizer_test.cpp
+  src/graph_optimizer/observation_backend.cpp
+  src/graph_optimizer/tracker_core.cpp
+)
 target_include_directories(graph_optimizer_test PUBLIC
 ${EIGEN3_INCLUDE_DIR}
 ${GTSAM_INCLUDE_DIR}
@@ -93,6 +97,8 @@ if(BUILD_TESTING)
 
   ament_auto_add_gtest(test_auto_graph_optimizer
     test/test_auto_graph_optimizer.cpp
+    src/graph_optimizer/observation_backend.cpp
+    src/graph_optimizer/tracker_core.cpp
   )
   target_include_directories(test_auto_graph_optimizer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
