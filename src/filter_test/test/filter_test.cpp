@@ -4,7 +4,7 @@
 TEST(filter, filter_test)
 {
     ArmorFilter af;
-    auto_aim_interfaces::msg::Armors::SharedPtr armors_msg;
+    auto armors_msg = std::make_shared<auto_aim_interfaces::msg::Armors>();
     auto_aim_interfaces::msg::Armor armor;
     tf2::Quaternion q;
     q.setRPY(0, 0, 1.5708);  // 绕 Z 轴旋转 90 度（弧度）

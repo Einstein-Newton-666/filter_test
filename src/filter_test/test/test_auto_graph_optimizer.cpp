@@ -8,11 +8,11 @@
 #include <utility>
 
 #include <gtsam/nonlinear/PriorFactor.h>
+#include <gtsam/geometry/Point3.h>
+#include <gtsam/geometry/Rot2.h>
 
-#include "filter_test/auto_graph_optimizer/models/motion_model.hpp"
-#include "filter_test/graph_optimizer/motion_models.hpp"
+#include "filter_test/graph_optimizer/armor_tracker.hpp"
 #include "filter_test/graph_optimizer_test.hpp"
-#include "filter_test/graph_optimizer/tracker_core.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
 
 // 注意：由于GTSAM未安装C++版本，此测试仅验证不依赖GTSAM的部分
@@ -313,82 +313,264 @@ TEST(LinearizationTest, AngleObservation) {
     EXPECT_NEAR(dz_dy, 0.5, 1e-10);
 }
 
-TEST(ArmorCenterFactorTest, YawJacobianMatchesFiniteDifference) {
-    gtsam::Key k_armor = gtsam::Symbol('h', 0);
-    gtsam::Key k_pos = gtsam::Symbol('a', 0);
-    gtsam::Key k_yaw = gtsam::Symbol('b', 0);
-    gtsam::Key k_radius = gtsam::Symbol('c', 0);
-    gtsam::Key k_dz = gtsam::Symbol('d', 0);
+TEST(GraphOptimizerApiTest, DynamicAndStaticKeysUseExpectedFrames) {
+    auto_graph::GraphOptimizer optimizer;
+    auto center = optimizer.declareDynamic<gtsam::Point3>("center", 'x');
+    auto yaw = optimizer.declareDynamic<gtsam::Rot2>("yaw", 'r');
+    auto radius = optimizer.declareStatic<double>("radius_a", 'a');
 
-    auto noise = gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector4::Ones());
-    ArmorCenterFactor factor(k_armor, k_pos, k_yaw, k_radius, k_dz, noise,
-                             1, Eigen::Isometry3d::Identity(), 0.10, 0.60);
+    EXPECT_EQ(center.name, "center");
+    EXPECT_EQ(yaw.name, "yaw");
+    EXPECT_EQ(radius.name, "radius_a");
+    EXPECT_EQ(optimizer.key(center, 3), gtsam::Symbol('x', 3));
+    EXPECT_EQ(optimizer.key(yaw, 7), gtsam::Symbol('r', 7));
+    EXPECT_EQ(optimizer.key(radius, 99), gtsam::Symbol('a', 0));
+}
 
+TEST(GraphOptimizerApiTest, WritesInitialAndFrameTypedValues) {
+    auto_graph::GraphOptimizer optimizer;
+    auto center = optimizer.declareDynamic<gtsam::Point3>("center", 'x');
+    auto bias = optimizer.declareStatic<double>("bias", 'b');
+
+    optimizer.beginInit();
+    optimizer.addPrior(
+        center, gtsam::Point3(0.0, 0.0, 0.0),
+        gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+    optimizer.insert(bias, 2.0);
+    optimizer.finishInit();
+
+    EXPECT_EQ(optimizer.getFrameId(), 0u);
+    EXPECT_EQ(optimizer.key(center), gtsam::Symbol('x', 0));
+    EXPECT_EQ(optimizer.key(bias), gtsam::Symbol('b', 0));
+    EXPECT_NEAR(optimizer.estimate<gtsam::Point3>(center).x(), 0.0, 1e-12);
+    EXPECT_NEAR(optimizer.estimate<double>(bias), 2.0, 1e-12);
+
+    const uint64_t frame_id = optimizer.beginFrame();
+    optimizer.insert(bias, 2.0);
+    optimizer.addPrior(center, gtsam::Point3(1.0, 2.0, 3.0),
+                       gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+
+    EXPECT_EQ(frame_id, 1u);
+    EXPECT_EQ(optimizer.key(center), gtsam::Symbol('x', 1));
+    EXPECT_EQ(optimizer.key(bias), gtsam::Symbol('b', 0));
+    EXPECT_NEAR(optimizer.estimate<gtsam::Point3>(center).x(), 1.0, 1e-12);
+    EXPECT_NEAR(optimizer.estimate<double>(bias), 2.0, 1e-12);
+}
+
+TEST(TypedGraphOptimizerTest, BeginFrameInsertedValueCanBeOptimized) {
+    auto_graph::GraphOptimizerConfig config;
+    config.cold_start_frames = 0;
+    config.update_iterations = 1;
+    config.verbose = false;
+
+    auto_graph::GraphOptimizer optimizer(config);
+    auto center = optimizer.declareDynamic<gtsam::Point3>("center", 'x');
+
+    optimizer.beginInit();
+    optimizer.addPrior(
+        center, gtsam::Point3(0.0, 0.0, 0.0),
+        gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+    optimizer.finishInit();
+
+    optimizer.beginFrame();
+    optimizer.addPrior(
+        center, gtsam::Point3(1.0, 0.0, 0.0),
+        gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+
+    auto result = optimizer.solve();
+
+    ASSERT_TRUE(result.optimized);
+    ASSERT_FALSE(result.failed);
+    auto estimate = optimizer.estimate<gtsam::Point3>(center);
+    EXPECT_NEAR(estimate.x(), 1.0, 1e-9);
+}
+
+TEST(TypedGraphOptimizerTest, FixedLagKeepsTypedStaticKeysTimestampFresh) {
+    auto_graph::GraphOptimizerConfig config;
+    config.cold_start_frames = 0;
+    config.verbose = false;
+    config.smoother_lag = 1.0;
+    config.update_iterations = 1;
+
+    auto_graph::GraphOptimizer optimizer(config);
+    auto center = optimizer.declareDynamic<gtsam::Point3>("center", 'x');
+    auto bias = optimizer.declareStatic<double>("bias", 'b');
+
+    optimizer.beginInit();
+    optimizer.addPrior(
+        center, gtsam::Point3(0.0, 0.0, 0.0),
+        gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+    optimizer.addPrior(
+        bias, 2.0,
+        gtsam::noiseModel::Isotropic::Sigma(1, 0.1));
+    optimizer.finishInit();
+
+    for (int frame_id = 1; frame_id <= 4; ++frame_id) {
+        optimizer.beginFrame();
+        optimizer.addPrior(
+            center, gtsam::Point3(static_cast<double>(frame_id), 0.0, 0.0),
+            gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+        optimizer.addPrior(
+            bias, 2.0,
+            gtsam::noiseModel::Isotropic::Sigma(1, 0.1));
+
+        auto result = optimizer.solve();
+        ASSERT_TRUE(result.optimized);
+        ASSERT_FALSE(result.failed);
+    }
+
+    EXPECT_NEAR(optimizer.estimate<double>(bias), 2.0, 1e-9);
+}
+
+TEST(TypedMotionFactorTest, YawFactorWrapsAcrossPi) {
+    filter_test::graph_optimizer::YawFactor factor(
+        gtsam::noiseModel::Isotropic::Sigma(1, 1.0),
+        gtsam::Symbol('r', 0), gtsam::Symbol('w', 0), gtsam::Symbol('r', 1), 0.0);
+
+    auto err = factor.evaluateError(
+        gtsam::Rot2::fromAngle(M_PI - 0.01),
+        0.0,
+        gtsam::Rot2::fromAngle(-M_PI + 0.01),
+        nullptr, nullptr, nullptr);
+
+    EXPECT_NEAR(std::abs(err[0]), 0.02, 1e-12);
+}
+
+TEST(TypedMotionFactorTest, VelocityFactorJacobiansHaveExpectedSigns) {
+    filter_test::graph_optimizer::VelocityFactor factor(
+        gtsam::noiseModel::Isotropic::Sigma(3, 1.0),
+        gtsam::Symbol('v', 0), gtsam::Symbol('v', 1));
+
+    gtsam::Matrix H1, H2;
+    auto err = factor.evaluateError(
+        gtsam::Vector3(1.0, 2.0, 3.0),
+        gtsam::Vector3(1.5, 1.0, 4.0),
+        &H1, &H2);
+
+    EXPECT_TRUE(err.isApprox(gtsam::Vector3(0.5, -1.0, 1.0), 1e-12));
+    EXPECT_TRUE(H1.isApprox(-gtsam::Matrix3::Identity(), 1e-12));
+    EXPECT_TRUE(H2.isApprox(gtsam::Matrix3::Identity(), 1e-12));
+}
+
+TEST(TypedArmorFactorTest, RadiusCenterZFactorUsesRot2YawResidual) {
+    const double observed_yaw = -M_PI + 0.01;
+    const double center_yaw = M_PI - 0.01;
+    const double radius = filter_test::graph_optimizer::radiusToState(0.3);
     gtsam::Pose3 armor_pose(
+        gtsam::Rot3::RzRyRx(0.0, 0.0, observed_yaw),
+        gtsam::Point3(-0.3, 0.0, 0.5));
+    gtsam::Point3 center(0.0, 0.0, 0.5);
+
+    filter_test::graph_optimizer::ArmorRadiusCenterZFactor factor(
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector4::Ones()),
+        gtsam::Symbol('h', 0), gtsam::Symbol('a', 0), gtsam::Symbol('r', 0),
+        gtsam::Symbol('x', 0), Eigen::Isometry3d::Identity(), 0, 0.10, 0.60);
+
+    auto err = factor.evaluateError(
+        armor_pose, radius, gtsam::Rot2::fromAngle(center_yaw), center,
+        nullptr, nullptr, nullptr, nullptr);
+
+    EXPECT_NEAR(std::abs(err[3]), 0.02, 1e-12);
+}
+
+TEST(TypedArmorFactorTest, RadiusCenterZFactorPoseJacobianMatchesFiniteDifference) {
+    Eigen::Isometry3d T_camera_to_odom{Eigen::Isometry3d::Identity()};
+    T_camera_to_odom.pretranslate(Eigen::Vector3d(0.3, -0.2, 0.15));
+    T_camera_to_odom.rotate(
+        Eigen::AngleAxisd(0.25, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(-0.12, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(0.05, Eigen::Vector3d::UnitX()));
+
+    filter_test::graph_optimizer::ArmorRadiusCenterZFactor factor(
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector4::Ones()),
+        gtsam::Symbol('h', 0), gtsam::Symbol('a', 0), gtsam::Symbol('r', 0),
+        gtsam::Symbol('x', 0), T_camera_to_odom, 0, 0.10, 0.60);
+
+    const gtsam::Pose3 armor_pose(
         gtsam::Rot3::RzRyRx(0.08, 0.18, 0.6),
         gtsam::Point3(1.0, -2.0, 0.3));
-    gtsam::Vector pos_vel(6);
-    pos_vel << 1.4, 0.0, -1.5, 0.0, 0.45, 0.0;
-    gtsam::Vector yaw_vyaw(2);
-    yaw_vyaw << -0.2, 0.0;
-    gtsam::Vector radius(2);
-    radius << 0.0, 0.0;
-    gtsam::Vector dz(1);
-    dz << 0.12;
+    const double radius = filter_test::graph_optimizer::radiusToState(0.28);
+    const gtsam::Rot2 center_yaw = gtsam::Rot2::fromAngle(-0.2);
+    const gtsam::Point3 center(1.4, -1.5, 0.45);
 
-    gtsam::Matrix H1, H2, H3, H4, H5;
-    gtsam::Vector err = factor.evaluateError(
-        armor_pose, pos_vel, yaw_vyaw, radius, dz, &H1, &H2, &H3, &H4, &H5);
+    gtsam::Matrix H1;
+    const auto err = factor.evaluateError(
+        armor_pose, radius, center_yaw, center, &H1, nullptr, nullptr, nullptr);
 
-    const double eps = 1e-6;
-    gtsam::Vector6 delta = gtsam::Vector6::Zero();
-    delta(2) = eps;  // yaw-axis local rotation perturbation for this pose.
-    gtsam::Pose3 perturbed = armor_pose.retract(delta);
-    gtsam::Vector err_perturbed = factor.evaluateError(
-        perturbed, pos_vel, yaw_vyaw, radius, dz, nullptr, nullptr, nullptr, nullptr, nullptr);
-    double numeric = (err_perturbed[3] - err[3]) / eps;
-
-    EXPECT_NEAR(H1(3, 2), numeric, 1e-5);
+    ASSERT_EQ(H1.rows(), 4);
+    ASSERT_EQ(H1.cols(), 6);
+    constexpr double eps = 1e-6;
+    for (int col = 0; col < 6; ++col) {
+        gtsam::Vector6 delta = gtsam::Vector6::Zero();
+        delta(col) = eps;
+        const auto err_perturbed = factor.evaluateError(
+            armor_pose.retract(delta), radius, center_yaw, center,
+            nullptr, nullptr, nullptr, nullptr);
+        const auto numeric = (err_perturbed - err) / eps;
+        EXPECT_TRUE(H1.col(col).isApprox(numeric, 1e-4)) << "col=" << col
+            << " H=" << H1.col(col).transpose()
+            << " numeric=" << numeric.transpose();
+    }
 }
+
+TEST(TypedArmorFactorTest, RadiusDZFactorPoseJacobianMatchesFiniteDifference) {
+    Eigen::Isometry3d T_camera_to_odom{Eigen::Isometry3d::Identity()};
+    T_camera_to_odom.pretranslate(Eigen::Vector3d(-0.15, 0.25, 0.08));
+    T_camera_to_odom.rotate(
+        Eigen::AngleAxisd(-0.18, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(0.09, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(-0.04, Eigen::Vector3d::UnitX()));
+
+    filter_test::graph_optimizer::ArmorRadiusDZFactor factor(
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector4::Ones()),
+        gtsam::Symbol('h', 0), gtsam::Symbol('b', 0), gtsam::Symbol('z', 0),
+        gtsam::Symbol('r', 0), gtsam::Symbol('x', 0),
+        T_camera_to_odom, 1, 0.10, 0.60);
+
+    const gtsam::Pose3 armor_pose(
+        gtsam::Rot3::RzRyRx(-0.06, 0.12, -0.4),
+        gtsam::Point3(-0.8, 1.2, 0.62));
+    const double radius = filter_test::graph_optimizer::radiusToState(0.36);
+    const double dz = 0.14;
+    const gtsam::Rot2 center_yaw = gtsam::Rot2::fromAngle(-0.1);
+    const gtsam::Point3 center(-0.45, 1.1, 0.5);
+
+    gtsam::Matrix H1;
+    const auto err = factor.evaluateError(
+        armor_pose, radius, dz, center_yaw, center,
+        &H1, nullptr, nullptr, nullptr, nullptr);
+
+    ASSERT_EQ(H1.rows(), 4);
+    ASSERT_EQ(H1.cols(), 6);
+    constexpr double eps = 1e-6;
+    for (int col = 0; col < 6; ++col) {
+        gtsam::Vector6 delta = gtsam::Vector6::Zero();
+        delta(col) = eps;
+        const auto err_perturbed = factor.evaluateError(
+            armor_pose.retract(delta), radius, dz, center_yaw, center,
+            nullptr, nullptr, nullptr, nullptr, nullptr);
+        const auto numeric = (err_perturbed - err) / eps;
+        EXPECT_TRUE(H1.col(col).isApprox(numeric, 1e-4)) << "col=" << col
+            << " H=" << H1.col(col).transpose()
+            << " numeric=" << numeric.transpose();
+    }
+}
+
 
 namespace {
 
-struct Identity1DMotionModel : auto_graph::MotionModel<Identity1DMotionModel, 1> {
-    explicit Identity1DMotionModel(double) {}
-
-    template<typename T>
-    void operator()(const T& x, T& x_next) const {
-        x_next[0] = x[0];
-    }
-};
-
-auto_graph::GraphOptimizer makeSingleVariableOptimizer(int cold_start_frames) {
+auto_graph::GraphOptimizer makeTypedPointOptimizer(int cold_start_frames) {
     auto_graph::GraphOptimizerConfig config;
     config.cold_start_frames = cold_start_frames;
     config.verbose = false;
+
     auto_graph::GraphOptimizer optimizer(config);
-
-    auto layout = auto_graph::VariableLayout(1).addDynamic("x", {0});
-    Eigen::VectorXd x0(1);
-    x0 << 0.0;
-    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(1, 1);
-    optimizer.initialize(layout, x0, P0);
-    return optimizer;
-}
-
-auto_graph::GraphOptimizer makeWindowResetOptimizer() {
-    auto_graph::GraphOptimizerConfig config;
-    config.cold_start_frames = 0;
-    config.max_window_frames = 1;
-    config.smoother_lag = 0.0;
-    config.verbose = false;
-    auto_graph::GraphOptimizer optimizer(config);
-
-    auto layout = auto_graph::VariableLayout(1).addDynamic("x", {0});
-    Eigen::VectorXd x0(1);
-    x0 << 0.0;
-    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(1, 1);
-    optimizer.initialize(layout, x0, P0);
+    auto center = optimizer.declareDynamic<gtsam::Point3>("center", 'x');
+    optimizer.beginInit();
+    optimizer.addPrior(
+        center, gtsam::Point3(0.0, 0.0, 0.0),
+        gtsam::noiseModel::Isotropic::Sigma(3, 0.1));
+    optimizer.finishInit();
     return optimizer;
 }
 
@@ -408,11 +590,7 @@ TEST(GraphOptimizerSolveResultTest, UninitializedOptimizerReportsNoAttempt) {
 }
 
 TEST(GraphOptimizerSolveResultTest, ColdStartReportsAccumulationWithoutFailure) {
-    auto optimizer = makeSingleVariableOptimizer(1);
-    optimizer.addCustomFactor<gtsam::PriorFactor<gtsam::Vector>>(
-        optimizer.key("x", 0),
-        gtsam::Vector1(0.0),
-        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(1.0)));
+    auto optimizer = makeTypedPointOptimizer(1);
 
     auto result = optimizer.solve();
 
@@ -425,15 +603,16 @@ TEST(GraphOptimizerSolveResultTest, ColdStartReportsAccumulationWithoutFailure) 
 }
 
 TEST(GraphOptimizerSolveResultTest, InvalidFactorReportsFailure) {
-    auto optimizer = makeSingleVariableOptimizer(0);
-    optimizer.addCustomFactor<gtsam::PriorFactor<gtsam::Pose3>>(
-        optimizer.key("x", 0),
+    auto optimizer = makeTypedPointOptimizer(0);
+    optimizer.beginFrame();
+    optimizer.addAuxPrior<gtsam::Pose3>(
+        gtsam::Symbol('x', 1),
         gtsam::Pose3(),
         gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector6::Ones()));
 
     auto result = optimizer.solve();
 
-    EXPECT_EQ(result.frame_id, 0u);
+    EXPECT_EQ(result.frame_id, 1u);
     EXPECT_TRUE(result.attempted);
     EXPECT_FALSE(result.optimized);
     EXPECT_FALSE(result.cold_start);
@@ -441,47 +620,8 @@ TEST(GraphOptimizerSolveResultTest, InvalidFactorReportsFailure) {
     EXPECT_FALSE(result.error_message.empty());
 }
 
-TEST(GraphOptimizerSolveResultTest, FrameIdReflectsWindowReset) {
-    auto optimizer = makeWindowResetOptimizer();
-    Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(1, 1) * 0.01;
-    optimizer.predict<Identity1DMotionModel>(0.01, Q);
-    ASSERT_EQ(optimizer.getFrameId(), 1u);
-
-    optimizer.addCustomFactor<gtsam::PriorFactor<gtsam::Vector>>(
-        optimizer.key("x", 1),
-        gtsam::Vector1(0.0),
-        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector1(1.0)));
-
-    auto result = optimizer.solve();
-
-    EXPECT_TRUE(result.optimized);
-    EXPECT_FALSE(result.failed);
-    EXPECT_EQ(optimizer.getFrameId(), 0u);
-    EXPECT_EQ(result.frame_id, optimizer.getFrameId());
-}
-
 TEST(GraphOptimizerVisualizationTest, RadiusConversionUsesTrackerRadiusBounds) {
     EXPECT_NEAR(filter_test::graphOptimizerRadiusFromState(0.0), 0.35, 1e-12);
-}
-
-TEST(GraphOptimizerYPDModelTest, SingleArmorUsesLogisticRadiusState) {
-    Eigen::VectorXd x = Eigen::VectorXd::Zero(11);
-    x[0] = 1.0;
-    x[2] = 0.0;
-    x[4] = 0.0;
-    x[6] = 0.0;
-    x[8] = filter_test::graph_optimizer::radiusToState(0.25);
-    x[9] = filter_test::graph_optimizer::radiusToState(0.40);
-
-    filter_test::graph_optimizer::ArmorCVMeasureYPD model(0);
-    const auto [z, H] = model.linearize(x);
-
-    EXPECT_EQ(H.rows(), 4);
-    EXPECT_EQ(H.cols(), 11);
-    EXPECT_NEAR(z[0], 0.0, 1e-12);
-    EXPECT_NEAR(z[1], 0.0, 1e-12);
-    EXPECT_NEAR(z[2], 0.75, 1e-12);
-    EXPECT_NEAR(z[3], 0.0, 1e-12);
 }
 
 TEST(GraphOptimizerVisualizationTest, ObservedArmorMarkerPitchMatchesSimulation) {
@@ -536,17 +676,128 @@ TEST(GraphOptimizerTrackerCoreTest, MatchArmorKeepsYawContinuityAcrossPi) {
     EXPECT_EQ(matched, 0);
 }
 
-TEST(GraphOptimizerTrackerCoreTest, CreatesRequestedObservationBackend) {
+TEST(GraphOptimizerFacadeTest, ArmorCvPixelGraphInitializeSetsStateAndFrameId) {
     filter_test::graph_optimizer::TrackerConfig config;
-    config.use_2d_observation = true;
-    auto pixel_backend = filter_test::graph_optimizer::createObservationBackend(config);
-    ASSERT_NE(pixel_backend, nullptr);
-    EXPECT_STREQ(pixel_backend->name(), "pixel");
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
 
-    config.use_2d_observation = false;
-    auto ypd_backend = filter_test::graph_optimizer::createObservationBackend(config);
-    ASSERT_NE(ypd_backend, nullptr);
-    EXPECT_STREQ(ypd_backend->name(), "ypd");
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    graph.initialize(observations);
+
+    EXPECT_TRUE(graph.initialized());
+    EXPECT_EQ(graph.frameId(), 0u);
+    EXPECT_NEAR(graph.state().center.x(), 1.25, 1e-12);
+    EXPECT_NEAR(graph.state().center.y(), 0.0, 1e-12);
+    EXPECT_NEAR(graph.state().center.z(), 0.5, 1e-12);
+}
+
+TEST(GraphOptimizerFacadeTest, ArmorCvPixelGraphUpdateReportsColdStartState) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 1;
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+    graph.initialize(observations);
+    const auto actual =
+        graph.update(observations, 0.25, Eigen::Isometry3d::Identity());
+
+    ASSERT_EQ(actual.matched_indices.size(), 1u);
+    EXPECT_EQ(actual.matched_indices[0], 0);
+    EXPECT_EQ(actual.solve_result.frame_id, 1u);
+    EXPECT_TRUE(actual.solve_result.cold_start);
+    EXPECT_FALSE(actual.solve_result.failed);
+    EXPECT_FALSE(actual.solve_result.optimized);
+    EXPECT_EQ(graph.frameId(), 1u);
+    EXPECT_NEAR(actual.state.center.x(), 1.25, 1e-12);
+    EXPECT_NEAR(actual.state.center.y(), 0.0, 1e-12);
+    EXPECT_NEAR(actual.state.center.z(), 0.5, 1e-12);
+    EXPECT_NEAR(actual.state.yaw, 0.0, 1e-12);
+}
+
+TEST(GraphOptimizerFacadeTest, ArmorCvPixelGraphUpdateOptimizesWithoutColdStart) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 0;
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+    graph.initialize(observations);
+    const auto actual =
+        graph.update(observations, 0.01, Eigen::Isometry3d::Identity());
+
+    EXPECT_EQ(actual.solve_result.frame_id, 1u);
+    EXPECT_FALSE(actual.solve_result.failed);
+    EXPECT_TRUE(actual.solve_result.optimized);
+    ASSERT_EQ(actual.matched_indices.size(), 1u);
+    EXPECT_EQ(actual.matched_indices[0], 0);
+}
+
+TEST(GraphOptimizerFacadeTest, ArmorCvPixelGraphResetClearsInitializationState) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    graph.initialize(observations);
+    ASSERT_TRUE(graph.initialized());
+
+    graph.reset();
+
+    EXPECT_FALSE(graph.initialized());
+    EXPECT_EQ(graph.frameId(), 0u);
+    EXPECT_NEAR(graph.state().center.norm(), 0.0, 1e-12);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, ArmorGraphTrackerDrivesUpdatePipeline) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 1;
+    filter_test::graph_optimizer::ArmorGraphTracker tracker(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    (void)tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
+    auto result = tracker.update({observations, 0.25, Eigen::Isometry3d::Identity()});
+
+    EXPECT_TRUE(result.accepted_frame);
+    EXPECT_TRUE(result.initialized);
+    EXPECT_EQ(result.matched_indices.size(), observations.armors.size());
+    EXPECT_EQ(tracker.frameId(), 1u);
 }
 
 TEST(GraphOptimizerTrackerCoreTest, InitializationFrameIsAcceptedButNotSolved) {
@@ -594,28 +845,81 @@ TEST(GraphOptimizerTrackerCoreTest, ColdStartFrameIsSolvedForPublishingCompatibi
     EXPECT_TRUE(result.solve_error.empty());
 }
 
-TEST(GraphOptimizerTrackerCoreTest, MismatchedBackendInputFailsFrameWithoutSolve) {
+TEST(GraphOptimizerTrackerCoreTest, OutlierObservationDoesNotBecomeMatchedFactor) {
     filter_test::graph_optimizer::TrackerConfig config;
-    config.use_2d_observation = true;
-    auto backend = filter_test::graph_optimizer::createObservationBackend(config);
-    auto optimizer = makeSingleVariableOptimizer(0);
+    config.optimizer.cold_start_frames = 0;
+    filter_test::graph_optimizer::ArmorGraphTracker tracker(config);
 
     auto_aim_interfaces::msg::Armors observations;
-    observations.armors.emplace_back();
-    Eigen::VectorXd predicted_state = Eigen::VectorXd::Zero(11);
-    std::vector<int> matched_indices;
-    filter_test::graph_optimizer::TrackerFrameContext context{
-        config,
-        observations,
-        Eigen::Isometry3d::Identity(),
-        predicted_state,
-        matched_indices,
-        0};
+    auto_aim_interfaces::msg::Armor init_obs;
+    init_obs.pose.position.x = 1.0;
+    init_obs.pose.position.y = 0.0;
+    init_obs.pose.position.z = 0.5;
+    init_obs.pose.orientation.w = 1.0;
+    init_obs.yaw = 0.0;
+    observations.armors.push_back(init_obs);
 
-    auto result = backend->addFrameFactors(optimizer, context);
+    (void)tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
 
-    EXPECT_FALSE(result.ok);
-    EXPECT_NE(result.error_message.find("matched_indices"), std::string::npos);
+    auto_aim_interfaces::msg::Armors outlier_observations;
+    auto_aim_interfaces::msg::Armor outlier;
+    outlier.pose.position.x = 10.0;
+    outlier.pose.position.y = -10.0;
+    outlier.pose.position.z = 3.0;
+    outlier.pose.orientation.w = 1.0;
+    outlier.yaw = M_PI;
+    outlier_observations.armors.push_back(outlier);
+
+    auto result =
+        tracker.update({outlier_observations, 0.01, Eigen::Isometry3d::Identity()});
+
+    ASSERT_EQ(result.matched_indices.size(), 1u);
+    EXPECT_EQ(result.matched_indices[0], -1);
+    EXPECT_FALSE(result.solve_failed);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, UnmatchedFrameResetsTrackerForReinitialization) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 0;
+    filter_test::graph_optimizer::ArmorGraphTracker tracker(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor init_obs;
+    init_obs.pose.position.x = 1.0;
+    init_obs.pose.position.y = 0.0;
+    init_obs.pose.position.z = 0.5;
+    init_obs.pose.orientation.w = 1.0;
+    init_obs.yaw = 0.0;
+    observations.armors.push_back(init_obs);
+
+    auto init_result =
+        tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
+    ASSERT_TRUE(init_result.initialized);
+
+    auto_aim_interfaces::msg::Armors outlier_observations;
+    auto_aim_interfaces::msg::Armor outlier;
+    outlier.pose.position.x = 10.0;
+    outlier.pose.position.y = -10.0;
+    outlier.pose.position.z = 3.0;
+    outlier.pose.orientation.w = 1.0;
+    outlier.yaw = M_PI;
+    outlier_observations.armors.push_back(outlier);
+
+    auto lost_result =
+        tracker.update({outlier_observations, 0.01, Eigen::Isometry3d::Identity()});
+
+    EXPECT_FALSE(lost_result.accepted_frame);
+    EXPECT_FALSE(lost_result.initialized);
+    EXPECT_FALSE(tracker.initialized());
+    ASSERT_EQ(lost_result.matched_indices.size(), 1u);
+    EXPECT_EQ(lost_result.matched_indices[0], -1);
+
+    auto reinit_result =
+        tracker.update({observations, 0.01, Eigen::Isometry3d::Identity()});
+    EXPECT_TRUE(reinit_result.accepted_frame);
+    EXPECT_TRUE(reinit_result.initialized);
+    EXPECT_FALSE(reinit_result.solved);
+    EXPECT_EQ(tracker.frameId(), 0u);
 }
 
 TEST(GraphOptimizerTrackerCoreTest, MatchArmorsAssignsUniqueIndices) {
@@ -630,10 +934,10 @@ TEST(GraphOptimizerTrackerCoreTest, MatchArmorsAssignsUniqueIndices) {
     auto_aim_interfaces::msg::Armors observations;
     for (int i = 0; i < 2; ++i) {
         auto_aim_interfaces::msg::Armor obs;
-        obs.pose.position.x = predicted[0].position.x() + 0.01 * i;
-        obs.pose.position.y = predicted[0].position.y();
-        obs.pose.position.z = predicted[0].position.z();
-        obs.yaw = predicted[0].yaw;
+        obs.pose.position.x = predicted[static_cast<std::size_t>(i)].position.x();
+        obs.pose.position.y = predicted[static_cast<std::size_t>(i)].position.y();
+        obs.pose.position.z = predicted[static_cast<std::size_t>(i)].position.z();
+        obs.yaw = predicted[static_cast<std::size_t>(i)].yaw;
         observations.armors.push_back(obs);
     }
 
@@ -642,6 +946,29 @@ TEST(GraphOptimizerTrackerCoreTest, MatchArmorsAssignsUniqueIndices) {
 
     ASSERT_EQ(matched.size(), 2u);
     EXPECT_NE(matched[0], matched[1]);
+}
+
+TEST(GraphOptimizerTrackerCoreTest, MatchArmorsRejectsLargeOutlier) {
+    filter_test::graph_optimizer::TrackerState state;
+    state.center << 0.0, 0.0, 0.5;
+    state.yaw = 0.0;
+    state.radius_1 = 0.3;
+    state.radius_2 = 0.4;
+    state.dz = 0.1;
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 10.0;
+    obs.pose.position.y = -10.0;
+    obs.pose.position.z = 3.0;
+    obs.yaw = M_PI;
+    observations.armors.push_back(obs);
+
+    auto matched = filter_test::graph_optimizer::matchArmorIndicesUnique(
+        state, observations, -1);
+
+    ASSERT_EQ(matched.size(), 1u);
+    EXPECT_EQ(matched[0], -1);
 }
 
 TEST(GraphOptimizerTrackerCoreTest, MatchArmorsMarksOverflowObservationsUnmatched) {

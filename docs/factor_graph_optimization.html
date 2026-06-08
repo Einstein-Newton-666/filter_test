@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>因子图优化原理 — 从最小二乘到 iSAM2</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d2991d; --red: #f85149;
+    --purple: #a371f7; --code-bg: #1c2128;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 960px; margin: 0 auto; padding: 40px 20px;
+  }
+  h1 { font-size: 2em; margin-bottom: .3em; color: #fff; }
+  h2 { font-size: 1.4em; margin: 2em 0 .6em; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: #f0f6fc; }
+  h3 { font-size: 1.1em; margin: 1.5em 0 .4em; color: var(--accent); }
+  p { margin: .6em 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; color: var(--orange); }
+  pre { background: var(--code-bg); padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); font-size: .85em; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .doc-nav {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 24px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface);
+  }
+  .doc-link {
+    display: inline-flex; align-items: center; min-height: 32px;
+    padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font-size: .9em;
+  }
+  .doc-link.active {
+    border-color: var(--accent); color: #79c0ff; background: #1a2a3a;
+  }
+  .note { background: #1a2332; border-left: 3px solid var(--accent); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .highlight { background: #1a2a1a; border-left: 3px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .warn { background: #2a2210; border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { padding: 10px 14px; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--surface); font-weight: 600; }
+  tr:nth-child(even) { background: #0d1117; }
+  tr:nth-child(odd) { background: var(--surface); }
+
+  .factor-graph {
+    display: flex; flex-direction: column; gap: 24px; margin: 20px 0;
+    font-family: 'JetBrains Mono', monospace; font-size: .82em;
+  }
+  .layer { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+  .vnode {
+    background: #1a3a5c; color: #79c0ff; padding: 8px 14px; border-radius: 20px;
+    border: 2px solid #58a6ff; font-weight: 600; white-space: nowrap;
+  }
+  .fnode {
+    background: #2a1a3c; color: #d2a8ff; padding: 6px 12px; border-radius: 4px;
+    border: 2px solid #a371f7; font-size: .78em; white-space: nowrap;
+  }
+  .static-node {
+    background: #1a3a1a; color: #7ee787; padding: 8px 14px; border-radius: 20px;
+    border: 2px solid #3fb950; font-weight: 600;
+  }
+  .connector { color: var(--muted); font-size: 1.2em; }
+
+  .baye-tree {
+    margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: .82em;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+  }
+  .clique {
+    background: var(--surface); border: 2px solid var(--border);
+    padding: 10px 20px; border-radius: 8px; text-align: center;
+  }
+  .clique.cached { border-color: var(--muted); opacity: .7; }
+  .clique.updated { border-color: var(--orange); background: #2a2210; }
+  .clique-root { border-color: var(--green); }
+
+  .math-block {
+    display: flex; align-items: center; justify-content: center;
+    gap: 12px; margin: 12px 0; flex-wrap: wrap;
+  }
+
+  .flow {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 16px 0; font-size: .88em; flex-wrap: wrap;
+  }
+  .flow-box {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 8px 14px; border-radius: 6px; text-align: center;
+  }
+  .flow-arrow { color: var(--accent); font-weight: bold; font-size: 1.2em; }
+</style>
+</head>
+<body>
+
+<h1>📐 因子图优化的原理</h1>
+<p style="color:var(--muted)">从非线性最小二乘 → Gauss-Newton → iSAM2 增量优化<br>结合 <code>graph_optimizer_test</code> 的装甲板跟踪实例</p>
+
+<nav class="doc-nav">
+  <a class="doc-link" href="graph_optimizer_architecture.html">当前架构</a>
+  <a class="doc-link active" href="factor_graph_optimization.html">因子图原理</a>
+  <a class="doc-link" href="gtsam_graph_optimizer_guide.html">GTSAM 使用指南</a>
+</nav>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>1. 本质：非线性最小二乘</h2>
+
+<p>所有优化问题都可以写成：</p>
+
+<pre><code>x* = argmin  Σ  || errorᵢ(x) ||²_Σᵢ
+       x       i</code></pre>
+
+<ul>
+  <li><code>errorᵢ(x)</code> — 第 i 个约束的<b>残差</b>（预测和观测的差）</li>
+  <li><code>Σᵢ</code> — 该约束的<b>信息矩阵</b>（协方差的逆），权重大的约束信息多</li>
+  <li>目标：找到 x 使得所有残差的加权平方和最小</li>
+</ul>
+
+<div class="note">
+  <strong>类比</strong>：想象用橡皮筋连接变量和观测。每根橡皮筋的拉力 ∝ 残差 × 信息矩阵。优化 = 找到所有橡皮筋拉力平衡的位置。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>2. 一帧的因子图结构</h2>
+
+<p>以装甲板跟踪为例，每帧的因子图长这样：</p>
+
+<div class="factor-graph">
+
+  <div class="layer">
+    <span style="color:var(--muted);font-size:.8em">帧 k-1</span>
+    <span class="vnode">X(k-1)<br><small>Point3</small></span>
+    <span class="connector">───</span>
+    <span class="fnode">TranslationFactor</span>
+    <span class="connector">───</span>
+    <span class="vnode">X(k)<br><small>Point3</small></span>
+  </div>
+
+  <div class="layer">
+    <span class="vnode">V(k-1)<br><small>Vector3</small></span>
+    <span class="connector">───</span>
+    <span class="fnode">VelocityFactor</span>
+    <span class="connector">───</span>
+    <span class="vnode">V(k)<br><small>Vector3</small></span>
+    <span style="margin:0 20px"></span>
+    <span class="vnode">R(k-1)<br><small>Rot2</small></span>
+    <span class="connector">───</span>
+    <span class="fnode">YawFactor</span>
+    <span class="connector">───</span>
+    <span class="vnode">R(k)<br><small>Rot2</small></span>
+  </div>
+
+  <div class="layer">
+    <span class="vnode">W(k-1)<br><small>double</small></span>
+    <span class="connector">───</span>
+    <span class="fnode">VyawFactor</span>
+    <span class="connector">───</span>
+    <span class="vnode">W(k)<br><small>double</small></span>
+    <span style="margin:0 20px"></span>
+    <span class="static-node">A(0)<br><small>半径a</small></span>
+    <span class="static-node">B(0)<br><small>半径b</small></span>
+  </div>
+
+  <div class="layer" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+    <span style="color:var(--muted);font-size:.8em">观测层</span>
+    <span class="vnode">armor_pose<br><small>Pose3</small></span>
+    <span class="connector">───</span>
+    <span class="fnode">Reproj<br>×4</span>
+    <span style="color:var(--muted)">→pixels</span>
+    <span style="margin:0 12px"></span>
+    <span class="fnode">ArmorCenter<br>Factor</span>
+    <span class="connector">───</span>
+    <span class="vnode">X(k)</span>
+    <span class="vnode">R(k)</span>
+    <span class="static-node">A(0)</span>
+    <span class="static-node">Z(0)</span>
+  </div>
+</div>
+
+<div class="note">
+  <strong>这是一个二分图</strong>：圆圈 = 变量节点，方块 = 因子节点。<br>
+  每个因子像一根"弹簧"，连接它涉及的变量，贡献一个 <code>||error||²</code> 项。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>3. Gauss-Newton 迭代</h2>
+
+<p>非线性最小二乘不能直接解——需要在当前估计值 <code>x₀</code> 处 Taylor 展开：</p>
+
+<pre><code>error(x₀ + Δx) ≈ error(x₀) + J(x₀) · Δx
+                  \______/   \_________/
+                  残差 b      雅可比 J
+
+目标: min || J·Δx + b ||²
+       Δx
+
+正规方程 (Normal Equations):
+    JᵀJ · Δx = -Jᵀb
+    \__/     \____/
+    近似       梯度
+    Hessian H</code></pre>
+
+<p>每轮迭代：计算 J 和 b → 组装 H 和 g → 解 H·Δx = -g → x₁ = x₀ + Δx → 重复。</p>
+
+<h3>具体例子：YawMotionFactor</h3>
+
+<pre><code>状态: r_pre=Rot2(0.5), w_pre=2.0, dt=0.01, r_cur=Rot2(0.53)
+
+预测: r_pred = r_pre * Rot2(w_pre·dt) = Rot2(0.52)
+残差: error = r_pred.localCoordinates(r_cur) = 0.53 - 0.52 = <span style="color:var(--green)">0.01</span>
+
+雅可比 (1×1 对每个变量, 用 Rot2 流形):
+  ∂error/∂r_pre = <span style="color:var(--red)">-1</span>
+  ∂error/∂w_pre = <span style="color:var(--red)">-0.01</span>
+  ∂error/∂r_cur = <span style="color:var(--green)">+1</span>
+
+正规方程 (3×3):
+  JᵀJ · [Δr_pre, Δw_pre, Δr_cur]ᵀ = -Jᵀ · 0.01</code></pre>
+
+<div class="highlight">
+  <strong>关键：Rot2 流形</strong> — 用 <code>localCoordinates</code> 而不是欧几里得减法。yaw=3.14 和 yaw=-3.14 是同一点，<code>localCoordinates</code> 返回 0 而非 6.28。
+</div>
+
+	<h3>手写 GTSAM 因子的内部结构 — 以 ArmorRadiusDZFactor 为例</h3>
+
+	<p>每个手写 GTSAM 因子的 <code>evaluateError</code> 分为<b>三层</b>：</p>
+
+	<pre><code>evaluateError(armor_pose_camera, radius, dz, center_yaw, center_pos)
+│
+├─ <b>第一层: 坐标系变换 + 几何量提取</b>
+│   pose = armor_pose_camera → T_camera_to_odom → armor_pose_odom
+│   armor_yaw     = rotationMatrixToRPY(R_odom).z()    ← 旋转矩阵→RPY→取yaw
+│   armor_position = armor_pose_odom.translation()
+│   radius_b       = logisticFunction(radius)           ← logistic→物理半径
+│   nx,ny = (cos,sin)(armor_yaw)    ← 装甲板法线方向
+│   tx,ty = (-ny, nx)               ← 装甲板切线方向 (法线逆时针90°)
+│   dx,dy = center - armor           ← 中心→装甲板向量
+│
+├─ <b>第二层: 4D 误差计算</b>
+│   tangential_err = tx·dx + ty·dy           ← 切线投影,应≈0
+│   radial_err     = nx·dx + ny·dy - r_b     ← 法线投影,应=半径
+│   z_err          = center_z + dz - armor_z
+│   pred_yaw       = center_yaw + index·(2π/4)
+│   yaw_err        = armor_yaw.localCoordinates(pred_yaw)  ← SO(2)包裹
+│
+└─ <b>第三层: 雅可比矩阵 (链式法则)</b>
+    H1 (armor_pose, 4×6) = [J_rot(4×3) | J_trans(4×3)]
+      ├─ J_p (4×3) = ∂error/∂armor_pos            ← 位置雅可比
+      ├─ d_e_d_psi (4×1) = ∂error/∂armor_yaw_angle ← 角度雅可比
+      ├─ d_psi_d_omega (1×3) = ∂yaw/∂rotation_vector
+      │     = [0, sin(roll)/cos(pitch), cos(roll)/cos(pitch)]
+      │     ↑ 需要 rotationMatrixToRPY 提供 roll 和 pitch 作为中间变量
+      ├─ J_rot = d_e_d_psi × d_psi_d_omega          ← 旋转部分 (4×3)
+      └─ J_trans = J_p × R_odom                     ← 平移部分 (4×3)
+    H2 (radius)  = [0, -dlog, 0, 0]ᵀ             ← logistic导数
+    H3 (dz)      = [0, 0, 1, 0]ᵀ
+    H4 (yaw)     = [0, 0, 0, 1]ᵀ
+    H5 (pos)     = [tx,ty,0; nx,ny,0; 0,0,1; 0,0,0]</code></pre>
+
+	<div class="note">
+	  <strong>rotationMatrixToRPY 在雅可比链中的角色：</strong>
+	  GTSAM 的 Pose3 使用<b>右乘扰动</b> R' = exp(ω) × R。
+	  yaw 角是 ZYX 欧拉角对旋转矩阵的偏导数，需要 roll 和 pitch 作为中间变量：
+	  <code>∂yaw/∂ω = [0, sin(roll)/cos(pitch), cos(roll)/cos(pitch)]</code>。<br><br>
+	  这个透传是必需的：Pose3 通过右乘扰动暴露 ω 方向上的梯度，
+	  而因子关心的是 yaw 角的变化。rotationMatrixToRPY 提供 roll/pitch，
+	  d_psi_d_omega 用它们完成 ω→yaw 的链式求导。<br><br>
+	  如果跳过这一步、硬编码 yaw 或忽略旋转雅可比，
+	  优化器会在错误的梯度方向更新 armor pose → 收敛失败。
+	</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>4. 多因子拼接：组装大矩阵</h2>
+
+<p>单帧可能有 10+ 个因子。每个因子贡献 <code>||J_i·Δx + b_i||²</code>。全部堆叠：</p>
+
+<pre><code>    ┌        ┐        ┌    ┐
+    │  J₁    │        │ b₁ │       J₁ 来自 YawMotionFactor (1×3)
+J = │  J₂    │    b = │ b₂ │       J₂ 来自 VyawSmoothFactor (1×2)
+    │  ...   │        │ ...│       J₃ 来自 ArmorReprojFactor (2×6)
+    └        ┘        └    ┘       ...
+
+H = Σ Jᵢᵀ · Wᵢ · Jᵢ     ← 信息矩阵, 各因子累加
+g = Σ Jᵢᵀ · Wᵢ · bᵢ     ← 梯度向量
+
+解 H·Δx = -g             ← 大型稀疏线性系统</code></pre>
+
+<p>每个因子只更新 H 和 g 中涉及的那几行/列。变量的信息量 = 连接到它的所有因子的权重之和。</p>
+
+<div class="note">
+  <strong>为什么是"稀疏"？</strong> — YawMotionFactor 只连 3 个变量 (r_pre, w_pre, r_cur)，它对 X(k) 的雅可比为 0。所以 J 矩阵大部分是零。H = JᵀJ 也是稀疏的。利用稀疏性 → O(n) 而非 O(n³)。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>5. iSAM2 的核心：贝叶斯树 + 增量更新</h2>
+
+<p>全图重新优化每次都要解一次 → 太慢。iSAM2 把计算分解成<b>团 (Clique)</b> 的树状结构，只更新受影响的部分。</p>
+
+<h3>5.1 因子图 → Bayes Net → Bayes Tree</h3>
+
+<div class="baye-tree" style="align-items:flex-start;margin-left:40px">
+  <div class="clique clique-root">C₁: X(5),V(5),R(5) │ X(4),V(4),W(4)<br><small>根团, 最新帧</small></div>
+  <div style="margin-left:30px;color:var(--muted)">├──</div>
+  <div class="clique cached" style="margin-left:30px">C₂: X(4),V(4),R(4) │ X(3),R(3)<br><small>已缓存, 不重算</small></div>
+  <div style="margin-left:60px;color:var(--muted)">├──</div>
+  <div class="clique cached" style="margin-left:60px">C₃: X(3),V(3) │ X(2),A(0)<br><small>已缓存</small></div>
+  <div style="margin-left:60px;color:var(--muted)">└──</div>
+  <div class="clique updated" style="margin-left:60px">C₄: X(2) │ X(1),B(0)<br><small>有新因子连接 → 重消元</small></div>
+  <div style="margin-left:90px;color:var(--muted)">└──</div>
+  <div class="clique cached" style="margin-left:90px">C₅: X(1) │ X(0)<br><small>已缓存</small></div>
+</div>
+
+<h3>5.2 增量更新流程</h3>
+
+<div class="flow">
+  <div class="flow-box">新因子到达<br><small>+新变量</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">标记受影响<br>的团</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">从叶向根<br>重消元</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">从根向叶<br>回代求解</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">更新估计<br>x_new</div>
+</div>
+
+<pre><code>复杂度:
+  全图优化:        O(n³)  每帧
+  iSAM2 增量更新:   O(m')  每帧, m' 是受影响变量数
+
+if 新因子只连当前帧变量:
+  只有根团需要重算 → O(1)</code></pre>
+
+<h3>5.3 重线性化</h3>
+
+<p>每个团有<b>线性化点</b> θ₀。当变量偏离 θ₀ 超过阈值：</p>
+
+<pre><code>if |θ - θ₀| > relinearizeThreshold (0.1):
+    标记该团 → 下次增量更新时, 在当前位置重新计算雅可比</code></pre>
+
+<p>这是 iSAM2 和 EKF 的<b>最本质区别</b>：EKF 做一次线性化后不再回头；iSAM2 可以回头重算。</p>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>6. 冷启动 & 滑动窗口</h2>
+
+<div class="flow">
+  <div class="flow-box" style="border-color:var(--orange)">帧 1-3<br>冷启动<br><small>只累积不优化</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box" style="border-color:var(--green)">帧 4<br>首次 iSAM2<br><small>全图优化</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">帧 5-18<br>增量更新<br><small>每次只算变动</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box" style="border-color:var(--red)">帧 19<br>滑动窗口<br><small>reset + 新先验</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">帧 20+<br>继续增量</div>
+</div>
+
+<div class="warn">
+  <strong>冷启动为什么需要？</strong> — 前几帧只有一两个观测，约束远远不够。直接优化 → 信息矩阵奇异 → 发散。等累积了足够的约束再第一次优化。<br>
+  <strong>滑动窗口为什么需要？</strong> — 图无限增长 → 内存↑、线性化点过时、增量更新复用率下降。定期 reset 用当前估计做先验。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>7. iSAM2 vs EKF 本质对比</h2>
+
+<table>
+  <tr><th></th><th>EKF</th><th>iSAM2</th></tr>
+  <tr>
+    <td><b>历史信息</b></td>
+    <td>压缩在 P 矩阵 (11×11)</td>
+    <td>完整因子图, 每帧一个节点</td>
+  </tr>
+  <tr>
+    <td><b>线性化</b></td>
+    <td>一次, 在线性化点不动</td>
+    <td>可多次重线性化</td>
+  </tr>
+  <tr>
+    <td><b>每帧计算</b></td>
+    <td>固定 O(11³), ~μs 级</td>
+    <td>增量 O(m'), ~ms 级</td>
+  </tr>
+  <tr>
+    <td><b>协方差</b></td>
+    <td>P 矩阵 (11×11 稠密)</td>
+    <td>边际协方差 (k×k 任意变量)</td>
+  </tr>
+  <tr>
+    <td><b>非线性处理</b></td>
+    <td>EKF: 一次 Taylor。UKF: sigma 点</td>
+    <td>Gauss-Newton 迭代, 收敛到局部最优</td>
+  </tr>
+  <tr>
+    <td><b>流形支持</b></td>
+    <td>需手动实现</td>
+    <td>GTSAM 内置 (Rot2, Pose3)</td>
+  </tr>
+  <tr>
+    <td><b>外点鲁棒</b></td>
+    <td>无内建</td>
+    <td>Huber/Cauchy M-estimator</td>
+  </tr>
+  <tr>
+    <td><b>代码量</b></td>
+    <td>~200 行 (公式实现)</td>
+    <td>~800 行 (因子定义 + key 管理)</td>
+  </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>8. jlu_tracker_node 代码结构</h2>
+
+<h3>8.1 文件组织</h3>
+
+<pre><code>src/filter_test/
+├── src/jlu_tracker_node.cpp          ROS2 适配节点 (订阅→转换→跟踪→发布)
+├── include/filter_test/jlu_tracker/
+│   ├── configs.hpp                   参数配置 (噪声/阈值/匹配/边界)
+│   ├── types.hpp                     数据结构 (ArmorPosition, TargetState, TrackState)
+│   ├── target.hpp                    RobotTarget 类声明 + GTSAM key 定义
+│   ├── factors.hpp                   因子声明 (6 个手写因子)
+│   └── spherical_coordinate.hpp      球坐标变换 + 雅可比
+└── src/jlu_tracker/
+    ├── target.cpp                    <b>核心: 匹配 + 建图 + ISAM2 优化</b>  (~500行)
+    ├── factors.cpp                   因子实现 (6 个因子, 手写雅可比)  (~290行)
+    └── types.cpp                     类型构造函数 (ROS2 Armor → jlu 转换)</code></pre>
+
+<h3>8.2 调用链路</h3>
+
+<pre><code>jlu_tracker_node::armorsCallback(msg)
+│
+├─ 1. ROS2 Armor → jlu::ArmorPositionRollPitchYawPoints  (types.cpp)
+│      提取: position, roll, pitch, yaw, 4角点像素
+│
+├─ 2. TF 查询: odom→camera_optical_frame → T_camera_to_odom
+│
+├─ 3. 坐标变换: armor odom → camera (jlu 内部用 camera 系)
+│      position = T_odom_to_camera * p_odom
+│      RPY       = R_o2c * R_odom → 提取 Roll/Pitch/Rot2(yaw)
+│
+├─ 4. target_->track(armors, stamp, T_camera_to_odom)    ← 核心
+│   │
+│   ├── 4.1 异常检测 (target.cpp:387-396)
+│   │       超时检查 (lost_threshold_sec=2.0)
+│   │       NIS χ² 检验 (滑动窗口, 60%超限→LOST)
+│   │
+│   ├── 4.2 运动预测 (target.cpp:410)
+│   │       target_state.predict(dt)  — 匀速外推
+│   │
+│   ├── 4.3 装甲板匹配 (target.cpp:427)
+│   │       matchArmors():
+│   │       ① 边际协方差传播: center → armor (YPD空间)
+│   │       ② 观测噪声: 距离/角度相关 (斜着噪声大)
+│   │       ③ 马氏距离门限 (20.0)
+│   │       ④ unique match: 每装甲板只匹配最近的观测
+│   │
+│   ├── 4.4 构建因子图 (target.cpp:440-441)
+│   │       addMotionValuesFactors()  +  addArmorValuesFactors()
+│   │
+│   │   ┌─ 运动层 ─────────────────────────────────────┐
+│   │   │ k=0: 4个先验 (X,V,R,W)                       │
+│   │   │ k>0:                                         │
+│   │   │   TranslationFactor  X(k-1),V(k-1) → X(k)    │
+│   │   │   YawFactor          R(k-1),W(k-1) → R(k)    │
+│   │   │   VelocityFactor     V(k-1)      → V(k)      │
+│   │   │   VyawFactor         W(k-1)      → W(k)      │
+│   │   └──────────────────────────────────────────────┘
+│   │
+│   │   ┌─ 观测层 (每个匹配的装甲板) ──────────────────┐
+│   │   │ 4× ArmorReprojFactor       Pose3 → 2D 像素   │
+│   │   │ 1× ArmorRadiusCenterZFactor (armor 0,2)      │
+│   │   │     或 ArmorRadiusDZFactor   (armor 1,3)     │
+│   │   │ 几何误差: 切向(≈0) + 径向(=r) + z + yaw_err  │
+│   │   └──────────────────────────────────────────────┘
+│   │
+│   ├── 4.5 ISAM2 增量优化 (target.cpp:452)
+│   │       isam2_.update(graph, values)
+│   │       calculateEstimate → 提取 X,V,R,W,A,B,Z
+│   │       marginalCovariance → 存 X_cov,V_cov,R_cov,W_cov (供匹配)
+│   │
+│   └── 4.6 状态管理 (target.cpp:236-257)
+│           TRACKING: 更新最终状态 + k++
+│           TEMPLOST: 有匹配但少, 仍更新状态
+│           LOST:     重置 ISAM2 + 协方差 + NIS 队列
+│
+├─ 5. publishResult()    → /graph_optimizer/armors
+└─ 6. publishMarkers()   → /graph_optimizer/marker
+      位置球(绿) + armors_pred(蓝) + armors_obs(红)</code></pre>
+
+<h3>8.3 变量布局 (7组稀疏, 对齐 iSAM2 自然排序)</h3>
+
+<table>
+<tr><th>变量</th><th>Key</th><th>类型</th><th>维度</th><th>动态/静态</th><th>说明</th></tr>
+<tr><td><code>X(k)</code></td><td>Symbol('x',k)</td><td>Point3</td><td>3D</td><td>每帧</td><td>中心位置 (x,y,z)</td></tr>
+<tr><td><code>V(k)</code></td><td>Symbol('v',k)</td><td>Vector3</td><td>3D</td><td>每帧</td><td>中心速度 (vx,vy,vz)</td></tr>
+<tr><td><code>R(k)</code></td><td>Symbol('r',k)</td><td>Rot2</td><td>1D</td><td>每帧</td><td>朝向 (SO(2) 流形)</td></tr>
+<tr><td><code>W(k)</code></td><td>Symbol('w',k)</td><td>double</td><td>1D</td><td>每帧</td><td>角速度</td></tr>
+<tr><td><code>A(0)</code></td><td>Symbol('a',0)</td><td>double</td><td>1D</td><td>静态</td><td>半径 r1 (logistic 空间)</td></tr>
+<tr><td><code>B(0)</code></td><td>Symbol('b',0)</td><td>double</td><td>1D</td><td>静态</td><td>半径 r2 (logistic 空间)</td></tr>
+<tr><td><code>Z(0)</code></td><td>Symbol('z',0)</td><td>double</td><td>1D</td><td>静态</td><td>高度差 dz</td></tr>
+</table>
+
+<div class="highlight">
+  <strong>为什么 7 组稀疏变量？</strong> — X(3D)+V(3D) 分离的 Cholesky 复杂度 = 3³+3³ = <b>54</b>。
+  如果合并为 pos_vel(6D)，复杂度 = 6³ = <b>216</b>，数值误差累积快 4 倍。
+  这就是 graph_optimizer 在 ~400 帧后 iSAM2 奇异而 jlu 能跑 10000+ 帧的<b>根本原因</b>。
+</div>
+
+<h3>8.4 因子一览</h3>
+
+<table>
+<tr><th>因子</th><th>Keys 数</th><th>误差维度</th><th>噪声 σ</th><th>作用</th></tr>
+<tr><td>TranslationFactor</td><td>3</td><td>3D</td><td>0.001</td><td>X(k)=X(k-1)+V(k-1)·dt, 强位置正则化</td></tr>
+<tr><td>YawFactor</td><td>3</td><td>1D</td><td>0.005</td><td>R(k)=R(k-1)·Rot2(W·dt), SO(2) 包裹</td></tr>
+<tr><td>VelocityFactor</td><td>2</td><td>3D</td><td>0.01</td><td><b>V(k)≈V(k-1), 速度欠约束的解决方案</b></td></tr>
+<tr><td>VyawFactor</td><td>2</td><td>1D</td><td>0.05</td><td>W(k)≈W(k-1), 角速度平滑</td></tr>
+<tr><td>ArmorReprojFactor</td><td>1</td><td>2D</td><td>1.0px</td><td>投影角点→像素, 每装甲板×4</td></tr>
+<tr><td>ArmorRadiusCenterZFactor</td><td>4</td><td>4D</td><td>[0.01,0.03,0.01,0.005]</td><td>armor 0,2: 切向+径向+z+yaw</td></tr>
+<tr><td>ArmorRadiusDZFactor</td><td>5</td><td>4D</td><td>[0.01,0.03,0.01,0.005]</td><td>armor 1,3: 切向+径向+z(dz)+yaw</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>9. 关键公式速查</h2>
+
+<h3>Gauss-Newton 更新</h3>
+<pre><code>Δx = -(JᵀWJ)⁻¹ JᵀW · error(x₀)       ← 迭代直到收敛
+x₁ = x₀ ⊞ Δx                            ← ⊞ 是流形上的 retract</code></pre>
+
+<h3>iSAM2 增量更新</h3>
+<pre><code>BayesTree.insert(factor)   → 标记受影响团
+BayesTree.eliminate()      → 从叶向根消元 (仅受影响链)
+BayesTree.backsub()        → 从根向叶回代
+Δ = new_estimate ⊟ old_estimate
+if |Δ| > threshold → 标记重线性化</code></pre>
+
+<h3>noiseModel 类型全解</h3>
+
+<p>噪声模型决定因子在优化中的<b>权重</b>。它的输入是标准差 σ，内部自动转为信息矩阵 Λ = 1/σ² 供 Gauss-Newton 使用。</p>
+
+<table>
+<tr><th>类型</th><th>构造</th><th>适用场景</th><th>代码示例</th></tr>
+<tr>
+  <td><b>Diagonal::Sigmas</b></td>
+  <td>每个分量独立 σ</td>
+  <td>多维误差, 各分量噪声不同</td>
+  <td><code>Diagonal::Sigmas(Vector3(0.01, 0.03, 0.005))</code></td>
+</tr>
+<tr>
+  <td><b>Diagonal::Variances</b></td>
+  <td>用方差 σ² 指定</td>
+  <td>已有协方差数据</td>
+  <td><code>Diagonal::Variances(Vector3(1e-4, 9e-4, 25e-6))</code></td>
+</tr>
+<tr>
+  <td><b>Diagonal::Precisions</b></td>
+  <td>用信息 1/σ² 指定</td>
+  <td>已有信息矩阵</td>
+  <td><code>Diagonal::Precisions(Vector3(10000, 1111, 40000))</code></td>
+</tr>
+<tr>
+  <td><b>Isotropic::Sigma</b></td>
+  <td>所有分量相同 σ</td>
+  <td>1D 误差 (yaw, vyaw, 半径)</td>
+  <td><code>Isotropic::Sigma(1, 0.005)</code></td>
+</tr>
+<tr>
+  <td><b>Unit</b></td>
+  <td>σ=1 固定</td>
+  <td>快速原型, 测试</td>
+  <td><code>Unit::Create(3)</code></td>
+</tr>
+<tr>
+  <td><b>Gaussian::Covariance</b></td>
+  <td>完整协方差矩阵</td>
+  <td>有相关性的噪声 (CWNA Q 矩阵)</td>
+  <td><code>Gaussian::Covariance(Q_6x6)</code></td>
+</tr>
+<tr>
+  <td><b>Robust</b></td>
+  <td>套一层 M-estimator</td>
+  <td>抗外点 (反光, 遮挡)</td>
+  <td><code>Robust::Create(Huber::Create(1.345), noise)</code></td>
+</tr>
+</table>
+
+<h3>三种指定方式的关系</h3>
+
+<pre><code>σ (标准差)  —最直观→  Sigmas(0.01)
+σ² (方差)   —中间量→  Variances(0.0001)
+1/σ² (信息) —内部用→  Precisions(10000)
+
+关系: precision = 1/variance = 1/σ²
+      σ 越小 → 信息越大 → 因子越"强"</code></pre>
+
+<h3>当前 jlu_tracker 中的实际使用</h3>
+
+<table>
+<tr><th>因子</th><th>类型</th><th>参数</th><th>σ 含义</th></tr>
+<tr><td>TranslationFactor</td><td>Diagonal::Sigmas</td><td>(0.001,0.001,0.001)</td><td>位置预测误差 ~1mm</td></tr>
+<tr><td>YawFactor</td><td>Isotropic::Sigma</td><td>(1, 0.005)</td><td>yaw 预测误差 ~0.3°</td></tr>
+<tr><td>VelocityFactor</td><td>Diagonal::Sigmas</td><td>(0.01,0.01,0.01)</td><td>帧间速度变化 ~1cm/s</td></tr>
+<tr><td>VyawFactor</td><td>Isotropic::Sigma</td><td>(1, 0.05)</td><td>帧间角速变化 ~3°/s</td></tr>
+<tr><td>ArmorReprojFactor</td><td>Diagonal::Sigmas</td><td>(1.0, 1.0)</td><td>像素误差 ~1px</td></tr>
+<tr><td>ArmorRadiusCenterZ</td><td>Diagonal::Sigmas</td><td>(0.01,0.03,0.01,0.005)</td><td>切向1cm, 径向3cm, z1cm, yaw0.3°</td></tr>
+<tr><td>半径/dz 先验</td><td>Isotropic::Sigma</td><td>(1, 0.5)</td><td>半径先验不确定 ~0.5</td></tr>
+</table>
+
+<h3>Robust 噪声 — 抗外点</h3>
+
+<p>标准最小二乘 (L2) 对异常值极度敏感: 一个错误角点能拖偏整个优化。</p>
+
+<pre><code>损失函数:
+  L2:     ρ(e) = ½e²                  ↗ 二次增长, 外点权重极大
+  Huber:  ρ(e) = ½e²        |e|≤k     → 小误差用二次
+               = k|e|-½k²   |e|>k     → 大误差退化为线性
+  Cauchy: ρ(e) = ½log(1+(e/k)²)       → 权重随误差递减
+  Tukey:  ρ(e) = 完全截断 |e|>k        → 大误差直接忽略
+
+使用示例:
+  auto base = Diagonal::Sigmas(Vector2(1.0, 1.0));
+  auto robust = Robust::Create(Huber::Create(1.345), base);
+  // 效果: 像素误差 > 1.345σ 时从 L2 退化为 L1, 不再被外点拖偏</code></pre>
+
+<div class="warn">
+  <strong>为什么不直接用 Robust？</strong> 当前仿真数据没有外点 (所有角点来自 PnP 真值+高斯噪声)。
+  如果未来接入真实检测器 (可能有反光/遮挡导致的错误角点), 给 ArmorReprojFactor 套 Huber
+  能显著提升鲁棒性。但注意: Robust 噪声使优化问题非凸, 需要更好的初值。
+</div>
+
+<h3>信息矩阵 vs 协方差</h3>
+<pre><code>信息矩阵 Λ = JᵀWJ     ← 优化用的是这个
+协方差   Σ = Λ⁻¹      ← 不确定性 (KF 的 P 矩阵)
+边际协方差 Σ_ii = (Λ⁻¹)_ii    ← 变量 i 的边际不确定性</code></pre>
+
+<div class="highlight">
+  <strong>协方差从哪来？</strong> — iSAM2 可以从贝叶斯树直接计算任意变量的边际协方差 <code>marginalCovariance(key)</code>，供马氏距离匹配使用。EKF 的 P 矩阵天然就是协方差。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>10. 几何约束因子 — 第二级 3D 观测</h2>
+
+<h3>10.1 装甲板几何关系</h3>
+
+<p>第一级（像素重投影）管"角点投到图像上对不对"，第二级管<b>"装甲板在 3D 空间的位置是否合理"</b>。</p>
+
+<div class="factor-graph">
+  <div class="layer">
+    <span style="color:var(--muted);font-size:.8em">4 块装甲板围绕中心 (俯视图)</span>
+  </div>
+  <div class="layer">
+    <span class="vnode">前<br>armor0<br>r1</span>
+  </div>
+  <div class="layer">
+    <span class="vnode">左<br>armor1<br>r2+dz</span>
+    <span class="static-node">● 中心<br>(center)</span>
+    <span class="vnode">右<br>armor3<br>r2+dz</span>
+  </div>
+  <div class="layer">
+    <span class="vnode">后<br>armor2<br>r1</span>
+  </div>
+</div>
+<p style="text-align:center;color:var(--muted);font-size:13px">
+  <code>armor = center - r·(nx, ny)</code> &nbsp; &nbsp;
+  <code>nx = cos(armor_yaw)</code> &nbsp;
+  <code>ny = sin(armor_yaw)</code>
+</p>
+
+<h3>10.2 四个误差分量</h3>
+
+<table>
+<tr><th>分量</th><th>公式</th><th>期望</th><th>含义</th></tr>
+<tr><td>切向</td><td><code>tx·dx + ty·dy</code></td><td>≈ 0</td><td>装甲板宽度方向的偏移。nx=cos(yaw), ny=sin(yaw), tx=-ny, ty=nx, dx=center_x-armor_x, dy=center_y-armor_y</td></tr>
+<tr><td>径向</td><td><code>nx·dx + ny·dy - r</code></td><td>= r</td><td>装甲板法线方向的距离</td></tr>
+<tr><td>z</td><td><code>center_z - armor_z [+ dz]</code></td><td>= 0/dz</td><td>高度差。armor 0,2 无 dz；armor 1,3 有 dz</td></tr>
+<tr><td>yaw</td><td><code>armor_yaw ⊖ pred_yaw</code></td><td>≈ 0</td><td>朝向差。pred_yaw=center_yaw+I·π/2, SO(2) 包裹</td></tr>
+</table>
+
+<h3>10.3 切向 vs 径向图解</h3>
+
+<table>
+<tr><th style="text-align:center;color:#3fb950">理想情况: 中心在装甲板正后方</th><th style="text-align:center;color:#f85149">异常情况: 中心偏离法线</th></tr>
+<tr><td style="padding:16px;text-align:center">
+  <div class="layer" style="justify-content:center">
+    <span class="vnode" style="background:#1a3a1a;border-color:#3fb950">armor<br>→ (nx,ny)</span>
+  </div>
+  <div class="layer" style="justify-content:center;margin-top:8px">
+    <span style="color:#3fb950;font-size:1.2em">│</span>
+  </div>
+  <div class="layer" style="justify-content:center">
+    <span style="color:#3fb950;font-size:1.2em">↓ dx,dy 沿法线</span>
+  </div>
+  <div class="layer" style="justify-content:center;margin-top:8px">
+    <span class="static-node">● 中心</span>
+  </div>
+  <p style="color:#3fb950;margin-top:8px"><code>切向 = 0</code> ✓ &nbsp; <code>径向 = r</code> ✓</p>
+</td><td style="padding:16px;text-align:center">
+  <div class="layer" style="justify-content:center">
+    <span class="vnode" style="background:#2a1a1a;border-color:#f85149">armor<br>→ (nx,ny)</span>
+  </div>
+  <div class="layer" style="justify-content:center;margin-top:8px">
+    <span style="color:#f85149;font-size:1.2em">╲</span>
+  </div>
+  <div class="layer" style="justify-content:center">
+    <span style="color:#f85149;font-size:1.2em">↘ dx,dy 有切向分量</span>
+  </div>
+  <div class="layer" style="justify-content:center;margin-top:8px">
+    <span class="static-node">● 中心 (偏了)</span>
+  </div>
+  <p style="color:#f85149;margin-top:8px"><code>切向 &gt; 0</code> → 优化器纠正</p>
+</td></tr>
+</table>
+
+<h3>10.4 为什么分两个因子类型</h3>
+
+<table>
+<tr><th></th><th>ArmorRadiusCenterZFactor</th><th>ArmorRadiusDZFactor</th></tr>
+<tr><td>适用装甲板</td><td>0, 2 (r1)</td><td>1, 3 (r2)</td></tr>
+<tr><td>连接的 Key 数</td><td>4</td><td>5</td></tr>
+<tr><td>连接的变量</td><td>armor_pose, radius_A, center_yaw, center_pos</td><td>armor_pose, radius_B, <b>dz</b>, center_yaw, center_pos</td></tr>
+<tr><td>z 误差</td><td><code>center_z - armor_z</code></td><td><code>center_z + dz - armor_z</code></td></tr>
+<tr><td>dz 雅可比</td><td>无 (不连 dz 变量)</td><td><code>∂z_err/∂dz = 1</code></td></tr>
+</table>
+
+<div class="highlight">
+  <strong>分开的好处：</strong> armor 0,2 不连 dz → 因子图稀疏 → ISAM2 消元更快。
+  如果用一个统一 5-key 因子，dz 对 armor 0,2 的雅可比为 0 → 多余连接 → 消元树变密。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>11. 马氏距离匹配 — matchArmors 的数学原理</h2>
+
+<h3>11.1 问题描述</h3>
+
+<p>iSAM2 优化给出了机器人<b>中心</b>的估计值和协方差。但观测到的是<b>装甲板</b>位置。
+需要把中心的不确定性传播到装甲板，再用马氏距离找最佳匹配。</p>
+
+<div class="flow">
+  <div class="flow-box">ISAM2 后验<br><small>cov(X,V,R,W)</small></div>
+  <div class="flow-arrow">CWNA dt</div>
+  <div class="flow-box">预测协方差<br><small>cov_pred(X,R)</small></div>
+  <div class="flow-arrow">J_armor</div>
+  <div class="flow-box">装甲板<br><small>cov(xyz)</small></div>
+  <div class="flow-arrow">J_sph</div>
+  <div class="flow-box">YPD 空间<br><small>cov(yaw,pitch,dist)</small></div>
+  <div class="flow-arrow">+R</div>
+  <div class="flow-box">创新协方差<br><small>S = P+R</small></div>
+  <div class="flow-arrow">errorᵀS⁻¹</div>
+  <div class="flow-box">马氏距离<br><small>d²</small></div>
+  <div class="flow-arrow">d²&lt;20?</div>
+  <div class="flow-box" style="border-color:var(--green)">匹配!</div>
+</div>
+
+<h3>11.2 步骤 1-2: 协方差时间传播 (CWNA)</h3>
+
+<pre><code>cov_X_pred = X_cov + V_cov·dt² + Q_translation·dt²
+cov_R_pred = R_cov + W_cov·dt² + Q_yaw·dt²
+
+center_cov(4×4) = ┌                ┐
+                   │ cov_X_pred  0 │
+                   │     0    cov_R│
+                   └                ┘</code></pre>
+
+<p>上一帧 ISAM2 提取的后验协方差 (X_cov, V_cov, R_cov, W_cov) 通过 CWNA 运动模型向前传播 dt 秒：</p>
+
+<pre><code>X(k) = X(k-1) + V(k-1)·dt + ½a·dt²
+
+∂X(k)/∂X(k-1) = I    (位置对位置)
+∂X(k)/∂V(k-1) = dt·I (位置对速度)
+∂V(k)/∂V(k-1) = I    (速度对速度)
+
+Var[X(k)] = Var[X(k-1)] + dt²·Var[V(k-1)] + dt²·Q_xx
+Var[R(k)] = Var[R(k-1)] + dt²·Var[W(k-1)] + dt²·Q_rr</code></pre>
+
+<h3>11.3 步骤 3: 第一跳 — 中心 → 装甲板位置</h3>
+
+<p>装甲板位置是中心位置 + yaw 的非线性函数：</p>
+
+<pre><code>armor_x = center_x - r·cos(yaw + I·π/2)
+armor_y = center_y - r·sin(yaw + I·π/2)
+armor_z = center_z + dz_armor</code></pre>
+
+<p>雅可比 <code>J(3×4)</code> 对 <code>[center_x, center_y, center_z, center_yaw]</code>：</p>
+
+<pre><code>     ┌                         ┐   ┌                        ┐
+     │ 1  0  0  r·sin(yaw+Iπ/2) │   │ 1  0  0  <b>-offset.y</b> │
+J =  │ 0  1  0 -r·cos(yaw+Iπ/2) │ = │ 0  1  0   <b>offset.x</b> │
+     │ 0  0  1        0         │   │ 0  0  1      0       │
+     └                         ┘   └                        ┘
+
+为什么 ∂x/∂yaw = -offset.y？
+  offset = armor - center = [-r·cos(φ), -r·sin(φ), dz]
+  ∴ r·sin(φ) = -offset.y  →  直接用已知 offset 算, 无需求三角函数</code></pre>
+
+<div class="note">
+  <strong>通用协方差传播公式:</strong> <code>P_target = J · P_source · Jᵀ</code><br>
+  4×4 中心协方差通过 3×4 雅可比变换为 4×4 装甲板位置协方差。
+</div>
+
+<h3>11.4 步骤 4: 第二跳 — 笛卡尔 → YPD 球坐标</h3>
+
+<pre><code>yaw_sph  = atan2(y, x)
+pitch    = atan2(z, √(x²+y²))
+distance = √(x²+y²+z²)
+
+J_sph = ∂[yaw_sph, pitch, distance] / ∂[x, y, z]  (3×3 解析雅可比)</code></pre>
+
+<p>两跳联动:</p>
+
+<pre><code>P_ypd = J_sph · J_xyz · P_center · J_xyzᵀ · J_sphᵀ
+      = J_total · P_center · J_totalᵀ</code></pre>
+
+<div class="highlight">
+  <strong>为什么用 YPD 空间而不是笛卡尔空间做匹配？</strong>
+  观测噪声在 YPD 空间是自然解耦的：yaw 误差 ≈ 角度误差，distance 误差 ≈ 深度误差。
+  在笛卡尔空间，同样的角度误差在不同距离产生的位置误差不同，协方差矩阵有复杂相关性。
+  YPD 空间的对角噪声假设更接近真实 PnP 误差特性。
+</div>
+
+<h3>11.5 步骤 5: 自适应观测噪声 S = P + R</h3>
+
+<p>观测噪声 <b>不是常数</b> — 取决于装甲板的视角和距离：</p>
+
+<table>
+<tr><th>噪声分量</th><th>公式</th><th>物理含义</th></tr>
+<tr>
+  <td><code>yaw_sph</code></td>
+  <td>常数 1.0</td>
+  <td>PnP 角度噪声，与视角无关</td>
+</tr>
+<tr>
+  <td><code>pitch</code></td>
+  <td>常数 1.0</td>
+  <td>同上</td>
+</tr>
+<tr>
+  <td><code>distance</code></td>
+  <td><code>log(0.1·|倾角|+1) + 0.001</code></td>
+  <td>斜着看装甲板 → PnP 深度退化 → 距离噪声指数增长</td>
+</tr>
+<tr>
+  <td><code>armor_yaw</code></td>
+  <td><code>log(距离+1)/20 + 0.01</code></td>
+  <td>越远装甲板朝向越难从像素判断</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>为什么用 log 缩放？</strong>
+  PnP 在极端条件下的退化不是线性的。从 0°→10° 倾角和从 60°→70° 倾角，噪声增长量级不同。
+  log 函数在大值区间压缩增长速率，能更好地匹配 PnP 的实际协方差膨胀曲线。
+</div>
+
+<h3>11.6 步骤 6: 马氏距离 + Unique Match</h3>
+
+<p>对每对 (预测装甲板, 观测) 计算马氏距离:</p>
+
+<pre><code>error(4D) = [yaw_sph_obs-pred, pitch_obs-pred, dist_obs-pred, armor_yaw_obs-pred]
+d² = errorᵀ · S⁻¹ · error         ← 马氏距离平方
+
+if d² < max_match_mahalanobis_distance (20.0):
+    accept</code></pre>
+
+<p><b>4 个容器 (armor 0/1/2/3)，每容器保留最小马氏距离的观测：</b></p>
+
+<pre><code>观测 A: armor_0 d²=0.5, armor_1 d²=3.2, armor_2 d²=8.1, armor_3 d²=12.0
+                                                            ↓ 各取 d²&lt;20 的最小
+观测 B: armor_0 d²=9.0, armor_1 d²=0.3, armor_2 d²=7.5, armor_3 d²=11.0
+
+结果:
+  bucket[0] = {d²=0.5, obs_A}   ← 唯一竞争者, 匹配
+  bucket[1] = {d²=0.3, obs_B}   ← 唯一竞争者, 匹配
+  bucket[2] = {d²=7.5, obs_B}   ← < 20, 匹配
+  bucket[3] = 空                 ← 无匹配</code></pre>
+
+<div class="warn">
+  <strong>注意：不是匈牙利算法！</strong>
+  这是简化的贪心策略。当两个观测竞争同一装甲板时，只保留更近的那个。
+  一个观测可以同时匹配多个装甲板（只要马氏距离都足够小）。
+  这对 4 装甲板场景足够——伪匹配会被几何约束因子在优化阶段自动排除。
+</div>
+
+<h3>11.7 马氏距离 vs 欧几里得距离</h3>
+
+<table>
+<tr><th></th><th>欧几里得距离</th><th>马氏距离</th></tr>
+<tr>
+  <td>定义</td>
+  <td><code>d = √(Δx² + Δy² + Δz²)</code></td>
+  <td><code>d² = errorᵀ·S⁻¹·error</code></td>
+</tr>
+<tr>
+  <td>权重</td>
+  <td>所有方向等权重</td>
+  <td>S⁻¹ 加权：不确定方向宽容，确定方向严格</td>
+</tr>
+<tr>
+  <td>门限含义</td>
+  <td>"距离差 < N 米"</td>
+  <td>"在正态分布里离均值 < N 个标准差"</td>
+</tr>
+<tr>
+  <td>例子</td>
+  <td>2m 远的匹配和 0.2m 的错配门槛相同</td>
+  <td>远距离有更大不确定 → 自动放宽门槛</td>
+</tr>
+</table>
+
+<div class="highlight">
+  <strong>马氏距离的本质：</strong> 把"这个观测偏离预测多远"换算成"在这个正态分布里发生概率多大"。
+  d²=1 → 约 1σ → 高概率匹配 (68%)。
+  d²=4 → 约 2σ → 边界匹配 (95%)。
+  d²=20 → 远超 3σ → 几乎不可能是正确匹配。
+</div>
+
+<script>
+document.querySelectorAll('h2,h3').forEach(h => {
+  h.style.cursor = 'pointer';
+  h.addEventListener('click', () => {
+    h.scrollIntoView({ behavior: 'smooth' });
+  });
+});
+</script>
+</body>
+</html>

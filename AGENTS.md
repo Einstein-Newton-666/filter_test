@@ -8,7 +8,7 @@ ROS2 C++ 工作区：基于 EKF/UKF + GTSAM 因子图优化的实时装甲板跟
 | `filter_test`          | EKF/UKF (`filter`) + iSAM2 图优化 (`graph_optimizer_test`)      |
 | `auto_aim_interfaces`  | 共享的 `Armors` / `Armor` / `TrackerTarget` 消息                |
 
-详细架构/用法见 `CLAUDE.md` 和 `docs/auto_graph_optimizer_*.md`。
+详细架构/用法见 `README.md`、`CLAUDE.md` 和 `.claude/skills/armor-graph-optimizer/SKILL.md`。
 本文件是高信噪比的精简摘要。
 
 ## 编译与运行
@@ -35,7 +35,7 @@ ros2 launch filter_test filter_test.launch.py
 ros2 run armor_simulation armor_simulation_node
 ros2 run armor_simulation gimbal_simulation
 ros2 run filter_test filter
-ros2 run filter_test graph_optimizer_test --ros-args -p use_2d_observation:=true
+ros2 run filter_test graph_optimizer_test --ros-args --params-file src/filter_test/config/config.yaml
 ```
 
 ROS 发行版：**Humble** (`.vscode/c_cpp_properties.json` 硬编码 `/opt/ros/humble` 路径)。
@@ -49,27 +49,39 @@ C++17，GCC 11 (Ubuntu 22.04)。
 
 **Singer 模型 (15D)** — `[x, vx, ax, y, vy, ay, z, vz, az, yaw, vyaw, ayaw, r1, r2, dz]`
 
-这些索引在多个头文件中被引用 (`cv_model.hpp`、`singer_model.hpp`、
-`graph_optimizer.hpp::VariableLayout` 等) — 修改需格外小心。
+这些索引在多个头文件和测试中被引用 (`cv_model.hpp`、`singer_model.hpp`、
+`graph_optimizer/armor_model.hpp` 等) — 修改需格外小心。
 
-## 图优化框架 — `auto_graph_optimizer/`
+## 图优化框架 — typed GTSAM
 
-两种观测模式 (在 `config.yaml` 中通过 `use_2d_observation` 切换)：
+当前主链路：
 
-- **YPD 模式** (`false`)：单层 3-key 因子，使用 Y/P/D 观测量
-- **2D 像素模式** (`true`)：两级因子图
-  1. `ArmorReprojFactor` — 1-key Pose3(camera) → 每个角点的 2D 像素误差，使用 GTSAM
-     `Cal3DS2` 投影 + 畸变
-  2. `ArmorCenterFactor` — 5-key 几何约束 `[tangential, radial, z, yaw]`，
-     `armor_yaw` 决定切向/径向方向，camera→odom 坐标变换
+```text
+GraphOptimizerTest -> ArmorGraphTracker -> ArmorCvPixelGraph -> auto_graph::GraphOptimizer -> GTSAM
+```
 
-`VariableLayout` 将 11D 状态拆分为 GTSAM 子变量：
-`pos_vel` (6D, 动态)、`yaw_vyaw` (2D, 动态)、`radius` (2D, 静态)、`dz` (1D, 静态)。
+核心文件：
 
-自定义运动/观测模型遵循 **CRTP**：定义 `operator()<T>`，Ceres Jet 自动微分处理雅可比。
+- `graph_optimizer/graph_core.hpp/.cpp` — typed `Var<T>`、key 映射、iSAM2/fixed-lag 生命周期
+- `graph_optimizer/armor_model.hpp/.cpp` — 状态变量、匹配、运动因子、像素重投影和几何因子
+- `graph_optimizer/armor_tracker.hpp/.cpp` — 空观测、reset、求解结果兼容语义
+- `graph_optimizer_test.cpp` — ROS 参数、TF、订阅和发布
 
-`gimbal_simulation` 读取 `use_ground_truth_tracking: true` 来绕过跟踪器闭环，
-直接从 GroundTruth 话题驱动。
+typed 变量：
+`center` (Point3, 动态)、`velocity` (Vector3, 动态)、`yaw` (Rot2, 动态)、
+`vyaw` (double, 动态)、`radius_a/radius_b` (double, 静态 logistic)、`dz` (double, 静态)。
+
+2D 像素观测固定启用；`use_2d_observation` 参数仅为旧配置兼容保留。每个匹配装甲板：
+
+1. 插入辅助 `Pose3` key (`h/j/k/l + frame`) 和 pose prior
+2. `ArmorTypedReprojFactor` — 1-key Pose3(camera) → 每个角点 2D 像素误差
+3. `ArmorRadiusCenterZFactor` / `ArmorRadiusDZFactor` — 辅助 Pose3 ↔ center/yaw/radius/dz 几何约束
+
+匹配代价为 `yaw_diff + 3 * position_error`，`matchArmorIndicesUnique()` 保证单帧 index 唯一；
+未匹配观测标为 `-1` 并跳过写图，避免重复辅助 key。
+
+`armor_simulation_node` 可通过 `publish_gimbal_gt: true` 直接向 `/send_pack` 发布真值 yaw/pitch，
+绕过 tracker → angle_solver 闭环；`gimbal_simulation` 仍订阅 `/send_pack` 并发布 TF。
 
 ## 仿真/PnP/可视化约定
 
@@ -83,15 +95,15 @@ C++17，GCC 11 (Ubuntu 22.04)。
 ## 配置文件 (修改这些，而不是头文件默认值)
 
 - `src/filter_test/config/config.yaml` — `/filter` (CV/Singer、EKF/UKF、R 参数) 和
-  `/graph_optimizer_test` (观测模式、像素 σ、几何噪声、`vel_sigma/vyaw_sigma`、相机内参)
+  `/graph_optimizer_test` (像素 σ、几何噪声、`vel_sigma/vyaw_sigma`、smoother、相机内参)
 - `src/armor_simulation/config/simulation_config.yaml` — 初始状态、运动限制、几何参数、
   像素噪声 U 形模型、`pixel_noise_common_ratio`、离群点、相机内参
 
 ## 已知问题 (未经重新调参请勿"修复")
 
-- `r2` (奇数装甲板半径) 过冲仍需调参；当前 2D 图优化已有
-  `VelSmoothFactor` / `VyawSmoothFactor`，但半径仍依赖几何因子和观测质量
-- `yaw` 在传统滤波路径仍按标量处理；图优化 `ArmorCenterFactor` 已对 yaw residual 做包裹
+- `r2` (奇数装甲板半径) 过冲仍需调参；当前 typed 图已有
+  `VelocityFactor` / `VyawFactor`，但半径仍依赖几何因子和观测质量
+- `yaw` 在传统滤波路径仍按标量处理；typed 图优化主 yaw 使用 `gtsam::Rot2`
 - 装甲板匹配使用启发式代价，而非马氏距离
 - UKF 收敛速度比 EKF 慢
 - Singer 模型在某些参数下可能产生 NaN

@@ -4,241 +4,340 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-ROS2 **Humble** C++17 项目 (GCC 11, Ubuntu 22.04)，用于使用卡尔曼滤波和因子图优化进行实时装甲板跟踪。包含三个主要 package：
+ROS2 **Humble** / C++17 / GCC 11 工作区，用于实时装甲板跟踪实验。核心方向是传统
+EKF/UKF 滤波和 GTSAM typed 因子图优化。`src/` 下有三个 package：
 
-1. **armor_simulation**：独立仿真器包（3D 运动 + 相机投影 + 噪声 + PnP + 云台）
-2. **filter_test**：滤波器和图优化测试包（EKF/UKF + GTSAM 因子图优化）
-3. **auto_aim_interfaces**：装甲板消息接口定义
+1. `armor_simulation`：3D 运动仿真、装甲板几何、相机投影、像素噪声、IPPE PnP、云台 TF、角度解算。
+2. `filter_test`：传统滤波器、typed GTSAM 图优化器、jlu tracker 适配层、ROS 节点、配置和测试。
+3. `auto_aim_interfaces`：共享自瞄消息接口。
 
-**详细文档：**
-- `docs/auto_graph_optimizer_architecture.md` — 图优化框架架构与原理
-- `docs/auto_graph_optimizer_usage.md` — 图优化框架使用指南
-- `AGENTS.md` — 高信噪比精简摘要（给其他 AI agent 用）
-- `.claude/skills/armor-filter/SKILL.md` — 滤波器专项知识
-- `.claude/skills/armor-simulator/SKILL.md` — 仿真器专项知识
+优先阅读：
+
+- `README.md` — 面向人类使用者的完整中文说明。
+- `AGENTS.md` — 给 agent 使用的高信噪比摘要。
+- `.claude/skills/armor-filter/SKILL.md` — 传统滤波器专项知识。
+- `.claude/skills/armor-graph-optimizer/SKILL.md` — 图优化专项知识。
+- `.claude/skills/armor-simulator/SKILL.md` — 仿真器专项知识。
 
 ## 构建命令
 
 ```bash
 # 基础构建
-colcon build --packages-select armor_simulation filter_test auto_aim_interfaces
+colcon build --packages-select auto_aim_interfaces armor_simulation filter_test
 
 # 构建并启用测试
-colcon build --packages-select armor_simulation filter_test --cmake-args -DBUILD_TESTING=ON
-
-# 运行测试（两个测试可执行文件）
-colcon test --packages-select filter_test
-colcon test-result --verbose      # 查看失败详情
-
-# 运行单个测试
-colcon test --packages-select filter_test --ctest-args -R "filter_test"
-colcon test --packages-select filter_test --ctest-args -R "test_auto_graph_optimizer"
+colcon build --packages-select auto_aim_interfaces armor_simulation filter_test --cmake-args -DBUILD_TESTING=ON
 
 # 环境设置
 source install/setup.bash
-export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH  # GTSAM 4.3 装在 /usr/local/lib
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH  # GTSAM 4.3 在 /usr/local/lib
+
+# 运行 filter_test 测试
+colcon test --packages-select filter_test
+colcon test-result --verbose
+
+# 运行单个测试
+colcon test --packages-select filter_test --ctest-args -R "filter_test" --output-on-failure
+colcon test --packages-select filter_test --ctest-args -R "test_auto_graph_optimizer" --output-on-failure
+
+# 仿真器噪声/PnP 测试
+colcon test --packages-select armor_simulation --ctest-args -R "test_noise_model" --output-on-failure
 ```
 
-**测试入口：**
-- `src/filter_test/test/filter_test.cpp` — 滤波器单元测试
-- `src/filter_test/test/test_auto_graph_optimizer.cpp` — 图优化器测试（当前仅测试不依赖 GTSAM 的部分）
+测试入口：
+
+- `src/filter_test/test/filter_test.cpp`
+- `src/filter_test/test/test_auto_graph_optimizer.cpp`
+- `src/armor_simulation/test/test_noise_model.cpp`
 
 ## 运行方式
 
 ```bash
-# 全启动 (仿真器 + 云台 + 滤波器 + 图优化器 + angle_solver)
+# 当前默认只启动 graph_optimizer_test
 ros2 launch filter_test filter_test.launch.py
 
-# 带参数
-ros2 launch filter_test filter_test.launch.py use_graph_optimizer:=true
-
-# 仅仿真器 (不含滤波器和图优化)
+# 仅仿真器
 ros2 launch armor_simulation simulation.launch.py
 
 # 单独节点
-ros2 run armor_simulation armor_simulation_node
-ros2 run armor_simulation gimbal_simulation
-ros2 run filter_test filter
-ros2 run filter_test graph_optimizer_test --ros-args -p use_2d_observation:=true
+ros2 run armor_simulation armor_simulation_node \
+  --ros-args --params-file src/armor_simulation/config/simulation_config.yaml
+ros2 run armor_simulation gimbal_simulation \
+  --ros-args --params-file src/filter_test/config/config.yaml
+ros2 run armor_simulation angle_solver
+ros2 run filter_test filter \
+  --ros-args --params-file src/filter_test/config/config.yaml
+ros2 run filter_test graph_optimizer_test \
+  --ros-args --params-file src/filter_test/config/config.yaml
+ros2 run filter_test jlu_tracker \
+  --ros-args --params-file src/filter_test/config/config.yaml
 ```
 
-## 架构设计
+`filter_test.launch.py` 已定义仿真器、云台、angle_solver、传统滤波器、图优化器和
+jlu tracker，但当前默认只启用 `graph_optimizer_test`。完整闭环需要手动打开对应节点。
 
-### 项目结构
+## 项目结构
 
-```
+```text
 src/
-├── armor_simulation/              # 仿真器 package (独立)
+├── armor_simulation/
 │   ├── include/armor_simulation/
-│   │   ├── armor_simulation.hpp   # 3D 运动仿真器
-│   │   ├── camera_model.hpp       # 相机投影 + IPPE PnP
-│   │   ├── armor_geometry.hpp     # 装甲板角点几何
-│   │   └── detection_noise.hpp    # 检测噪声 (U 形距离模型)
+│   │   ├── armor_simulation.hpp      # 主仿真节点声明
+│   │   ├── camera_model.hpp          # 投影、畸变、IPPE PnP、外参
+│   │   ├── armor_geometry.hpp        # 装甲板角点几何
+│   │   ├── detection_noise.hpp       # 像素噪声和检测概率
+│   │   └── pnp_pose_utils.hpp        # PnP RPY 提取和双解 yaw 修正
 │   ├── src/
-│   │   ├── armor_simulation.cpp   # 主仿真节点
-│   │   ├── gimbal_simulation.cpp  # 云台仿真 (S-curve + TF)
-│   │   ├── angle_solver.cpp       # 角度解算器
-│   ├── config/                    # 仿真参数
-│   └── msg/GroundTruth.msg        # 真值消息
+│   │   ├── armor_simulation.cpp      # 运动、投影、噪声、PnP、marker、image
+│   │   ├── gimbal_simulation.cpp     # S-curve 云台、TF、/recieve_pack
+│   │   └── angle_solver.cpp          # /tracker/target -> /send_pack
+│   ├── config/simulation_config.yaml
+│   └── msg/GroundTruth.msg
 │
-├── filter_test/                   # 滤波器 + 图优化
+├── filter_test/
 │   ├── include/filter_test/
-│   │   ├── auto_graph_optimizer/  # 图优化框架 (6 文件)
-│   │   │   ├── graph_optimizer.hpp        # VariableLayout + 因子 + GraphOptimizer
-│   │   │   ├── auto_graph_optimizer.hpp   # umbrella header
-│   │   │   ├── models/
-│   │   │   │   ├── motion_model.hpp       # MotionModel CRTP 基类
-│   │   │   │   └── measure_model.hpp      # MeasureModel CRTP 基类
-│   │   │   └── utils/
-│   │   │       ├── helpers.hpp            # logistic 函数, 角度工具
-│   │   │       └── types.hpp              # 类型定义
-│   │   ├── graph_optimizer/       # graph_optimizer_test 内部 tracker core
-│   │   │   ├── tracker_core.hpp           # ArmorGraphTracker: init/match/build/solve
-│   │   │   ├── observation_backend.hpp    # 2D/YPD 观测后端接口
-│   │   │   ├── factors.hpp                # ArmorReproj/Center/Smooth 因子
-│   │   │   ├── motion_models.hpp          # 2D/YPD 模式使用的 CRTP 模型
-│   │   │   ├── tracker_math.hpp           # 半径、yaw、几何/匹配工具
-│   │   │   └── tracker_types.hpp          # tracker 输入/输出/配置结构
-│   │   ├── filters/               # 传统滤波器
-│   │   │   ├── kalman_filter.hpp          # KF 模板基类 <N_X, N_Z>
-│   │   │   ├── extended_kalman.hpp        # EKF (Ceres autodiff)
-│   │   │   ├── unscented_kalman.hpp       # UKF
-│   │   │   ├── cv_model.hpp              # CV 模型 (11D)
-│   │   │   └── singer_model.hpp          # Singer 模型 (15D)
-│   │   ├── filter.hpp            # ArmorFilter 业务逻辑类
-│   │   ├── filter_test.hpp        # ArmorTest ROS2 节点
-│   │   ├── graph_optimizer_test.hpp       # GraphOptimizerTest ROS 节点外壳 + 兼容别名
-│   │   └── common.hpp            # 枚举 / 角度工具
-│   └── src/
-│       ├── filter.cpp            # 传统滤波器入口
-│       ├── graph_optimizer/      # tracker core / backend 源文件
-│       └── graph_optimizer_test.cpp       # 图优化 ROS 节点入口
+│   │   ├── filters/
+│   │   │   ├── kalman_filter.hpp
+│   │   │   ├── extended_kalman.hpp
+│   │   │   ├── unscented_kalman.hpp
+│   │   │   ├── cv_model.hpp
+│   │   │   └── singer_model.hpp
+│   │   ├── graph_optimizer/
+│   │   │   ├── graph_core.hpp        # auto_graph::GraphOptimizer, Var<T>, SolveResult
+│   │   │   ├── graph_math.hpp        # 角度、logistic、Eigen/GTSAM helper
+│   │   │   ├── armor_model.hpp       # 因子、匹配、状态、ArmorCvPixelGraph
+│   │   │   └── armor_tracker.hpp     # ArmorGraphTracker, FrameTimeTracker
+│   │   ├── jlu_tracker/              # jlu_vision_26 tracker 适配层
+│   │   ├── filter.hpp                # ArmorFilter 业务逻辑
+│   │   ├── filter_test.hpp           # ArmorTest ROS 节点
+│   │   ├── graph_optimizer_test.hpp  # GraphOptimizerTest ROS 节点外壳
+│   │   └── common.hpp
+│   ├── src/
+│   │   ├── filter.cpp
+│   │   ├── filter_test.cpp
+│   │   ├── graph_optimizer/
+│   │   │   ├── graph_core.cpp
+│   │   │   ├── armor_model.cpp
+│   │   │   └── armor_tracker.cpp
+│   │   ├── graph_optimizer_test.cpp
+│   │   └── jlu_tracker_node.cpp
+│   ├── config/config.yaml
+│   └── launch/filter_test.launch.py
 │
-└── auto_aim_interfaces/           # 消息定义 (Armors, Armor, TrackerTarget 等)
+└── auto_aim_interfaces/
+    └── msg/
 ```
 
-### 核心组件
+## 传统滤波器
 
-#### 传统滤波器 (EKF/UKF)
-- **`KalmanFilter<N_X, N_Z>`** (`filters/kalman_filter.hpp`): KF 模板基类，predict/update 接口
-- **`ExtendedKalmanFilter`** / **`UnscentedKalmanFilter`**: EKF/UKF 实现
-- **CV 模型** (`cv_model.hpp`): 11D 状态 `[xc,vxc,yc,vyc,za,vza,yaw,vyaw,r1,r2,dz]`
-- **Singer 模型** (`singer_model.hpp`): 15D 状态
-- **`ArmorFilter`** (`filter.hpp`): 滤波器业务逻辑（init/predict/update/matchArmor）
+主要文件：
 
-#### 图优化框架
+- `filters/kalman_filter.hpp`：模板 KF 基类。
+- `filters/extended_kalman.hpp`：动态维度 EKF，Ceres Jet 自动微分雅可比。
+- `filters/unscented_kalman.hpp`：动态维度 UKF。
+- `filters/cv_model.hpp`：CV 11D 预测和观测模型。
+- `filters/singer_model.hpp`：Singer 15D 预测和观测模型。
+- `filter.hpp` / `filter.cpp`：`ArmorFilter` 业务流程。
 
-**`GraphOptimizer`** (`graph_optimizer.hpp`) — iSAM2 增量因子图优化
+传统路径：
 
-核心设计：
-- `VariableLayout` — 全状态向量 ↔ GTSAM 子变量拆分 (gather/scatter)
-- 当前 11D 状态 → 4 组: `pos_vel`(6D), `yaw_vyaw`(2D), `radius`(2D,静态), `dz`(1D,静态)
-- `SingleMotionFactor` — per-group 2-key 运动因子 (autodiff)
-- `AutoMotionFactor` — 全状态 2-key 运动因子 (autodiff, 兼容 YPD 模式)
-- `AutoMeasureFactor` — 全状态 N-key 观测因子 (autodiff)
-- 2D 模式额外有 `VelSmoothFactor` / `VyawSmoothFactor`，由 `vel_sigma` / `vyaw_sigma` 控制速度平滑
-
-**`graph_optimizer_test` 节点结构**：
-- `GraphOptimizerTest` (`graph_optimizer_test.cpp/.hpp`) 只负责参数、订阅、TF、发布，外部 executable/node/topic/参数 namespace 保持不变
-- `ArmorGraphTracker` (`graph_optimizer/tracker_core.hpp`) 持有 `auto_graph::GraphOptimizer`，管理初始化、frame id、装甲板匹配、运动因子、观测因子和 solve
-- `ObservationBackend` (`graph_optimizer/observation_backend.hpp`) 隔离两种观测路径；`PixelObservationBackend` 添加 Pose3 初值、角点重投影、中心几何和速度平滑因子，`YpdObservationBackend` 保留单板/双板 YPD 观测
-- `tracker_math.hpp` 中的 `matchArmorIndicesUnique()` 保证单帧最多 4 个有效装甲板 index；超出的观测标为 `-1`，2D 后端跳过以避免重复 Pose3 key
-- `GraphOptimizer::solve()` 返回 `SolveResult`：冷启动为 `cold_start=true, optimized=false` 且继续累计因子；iSAM2 异常为 `failed=true` 并清空本轮增量图。`TrackerUpdateResult::solved` 表示该帧可按兼容策略发布，`solve_failed=true` 的帧不发布目标/marker。
-
-两级像素观测 (对齐 jlu_vision_26)：
-- **第一级**: `ArmorReprojFactor` — 1-key Pose3(camera 系) → 2D 像素误差 (每角点), GTSAM Cal3DS2 投影+畸变
-- **第二级**: `ArmorCenterFactor` — 5-key 几何约束 [切向, 径向, z, yaw], armor_yaw 定义切向/径向方向, T_camera_to_odom
-
-API 流程：
-```
-// YPD 模式 (单层)
-opt.predict<ArmorCVMotionModel>(dt, Q);
-opt.update<ArmorCVMeasureYPD>(z, R);
-opt.solve();
-
-// 2D 像素模式 (两级)
-opt.advanceFrame(dt);
-opt.addMotionFactor<TranslationModel>("pos_vel", model, Q_trans);
-opt.addMotionFactor<YawModel>("yaw_vyaw", model, Q_yaw);
-opt.addCustomFactor<ArmorReprojFactor>(...);   // 每个角点
-opt.addCustomFactor<ArmorCenterFactor>(...);   // 每个装甲板
-opt.solve();
+```text
+/detector/armors
+  -> ArmorTest
+  -> ArmorFilter
+  -> EKF 或 UKF
+  -> CV 或 Singer
+  -> /track_result, /track_result/marker
 ```
 
-自定义模型只需定义 CRTP `operator()<T>` 模板，Ceres Jet 自动求导。
+`ArmorFilter::update()` 主要流程：
 
-#### 云台仿真
-- `gimbal_simulation.cpp` — S-curve 动力学 + TF 广播 (odom→gimbal_link→camera_optical_frame)
-- `use_ground_truth_tracking: true` — 真值追踪模式，绕过 tracker 闭环，直接订阅 GroundTruth 计算云台角度
+1. 空观测直接返回上一状态。
+2. 根据消息时间戳计算 `dt`。
+3. 用预测状态做装甲板匹配。
+4. 将观测 xyz 转为 yaw/pitch/distance。
+5. 执行正式 predict + update。
+6. 对半径和 `dz` 做约束。
+7. 返回 11D 兼容输出。
 
-### 状态向量索引
+## typed 图优化器
 
-**CV 模型 (11D)**: `[xc, vxc, yc, vyc, za, vza, yaw, vyaw, r1_u, r2_u, dz]`
-- 位置: x[0], x[2], x[4]; 速度: x[1], x[3], x[5]
-- yaw: x[6], vyaw: x[7]; 半径(logistic): x[8], x[9]; dz: x[10]
+当前主线已经是 typed GTSAM 实现，不再使用旧 `auto_graph_optimizer/` 或
+`tracker_core/observation_backend` 分层。
 
-**Singer 模型 (15D)**: `[x, vx, ax, y, vy, ay, z, vz, az, yaw, vyaw, ayaw, r1, r2, dz]`
+主链路：
 
-> ⚠️ 这些索引在 `cv_model.hpp`、`singer_model.hpp`、`graph_optimizer.hpp::VariableLayout` 等多个文件中被引用，修改需格外小心并全局搜索。
+```text
+GraphOptimizerTest ROS node
+  -> ArmorGraphTracker
+  -> ArmorCvPixelGraph
+  -> auto_graph::GraphOptimizer
+  -> GTSAM iSAM2 / fixed-lag smoother
+```
 
-### ROS2 接口
+职责划分：
 
-**订阅**:
-- `/detector/armors` (Armors): 检测器/仿真器数据 (GraphOptimizerTest 和 ArmorTest 订阅)
-- `/armor_simulation/ground_truth` (GroundTruth): 机器人真值 (云台真值追踪用)
+- `auto_graph::GraphOptimizer`：泛型 typed GTSAM 生命周期。负责变量声明、key 映射、
+  initial values、factor graph、iSAM2/fixed-lag solve、estimate、reset。不要加入
+  armor/camera/ROS/匹配语义。
+- `ArmorCvPixelGraph`：装甲板 CV + 像素观测图。负责初始化、常速预测、装甲板匹配、
+  运动因子、像素重投影因子、几何因子和输出转换。
+- `ArmorGraphTracker`：ROS-facing 薄封装。负责空观测、拒绝帧、失败 reset 和
+  `TrackerUpdateResult` 兼容语义。
+- `GraphOptimizerTest`：ROS 节点外壳。负责参数、TF、订阅 `/detector/armors`，
+  发布 `/graph_optimizer/armors`、`/tracker/target`、`/graph_optimizer/marker`。
 
-**发布**:
-- `/graph_optimizer/armors` (Armors): 图优化跟踪结果
-- `/tracker/target` (TrackerTarget): 跟踪目标 (供 angle_solver 使用)
-- `/track_result` (Result): 滤波器跟踪结果
-- `/track_result/marker` (MarkerArray): RViz 可视化
+typed 变量：
 
-### 配置文件
+| 变量 | 类型 | 动态 | key 前缀 | 含义 |
+| --- | --- | --- | --- | --- |
+| `center` | `gtsam::Point3` | 是 | `x` | 机器人中心 |
+| `velocity` | `gtsam::Vector3` | 是 | `v` | 中心速度 |
+| `yaw` | `gtsam::Rot2` | 是 | `r` | 中心 yaw，流形变量 |
+| `vyaw` | `double` | 是 | `w` | yaw rate |
+| `radius_a` | `double` | 否 | `a` | 偶数装甲板半径 logistic 状态 |
+| `radius_b` | `double` | 否 | `b` | 奇数装甲板半径 logistic 状态 |
+| `dz` | `double` | 否 | `z` | 奇偶装甲板高度差 |
 
-> **原则：修改配置文件而非头文件默认值。**
+动态变量用当前 frame id；静态变量 key 固定 frame `0`，fixed-lag smoother 下会刷新
+timestamp 避免被边际化。
+
+运动因子：
+
+- `TranslationFactor`：`center(k) - center(k-1) - velocity(k-1) * dt`
+- `VelocityFactor`：速度随机游走。
+- `YawFactor`：`Rot2` yaw 积分，处理 `+-pi` 跨界。
+- `VyawFactor`：yaw-rate 随机游走。
+
+像素观测写图：
+
+1. 每个匹配 armor 生成一个辅助 `Pose3` key：`h/j/k/l + frame`。
+2. 插入辅助 `Pose3` 初值，并添加 pose prior。
+3. 每个角点添加一个 `ArmorTypedReprojFactor`。
+4. 偶数装甲板添加 `ArmorRadiusCenterZFactor`。
+5. 奇数装甲板添加 `ArmorRadiusDZFactor`。
+
+匹配代价：
+
+```text
+cost = yaw_diff + 3.0 * position_error
+same as last_armor_index -> cost *= 0.85
+cost > match_max_cost -> reject
+```
+
+`matchArmorIndicesUnique()` 保证同一帧最多一个观测占用同一个物理 index；未匹配观测标为
+`-1`，写图时跳过，避免辅助 Pose3 key 冲突。
+
+## 状态向量索引
+
+**CV 模型 (11D)**：
+
+```text
+[xc, vxc, yc, vyc, za, vza, yaw, vyaw, r1_u, r2_u, dz]
+  0    1    2    3    4    5    6     7     8     9    10
+```
+
+- 位置：`0, 2, 4`
+- 速度：`1, 3, 5`
+- yaw / yaw rate：`6, 7`
+- typed 图中半径使用 logistic 无界状态，物理范围由 `kRadiusMin/kRadiusMax` 限制。
+
+**Singer 模型 (15D)**：
+
+```text
+[x, vx, ax, y, vy, ay, z, vz, az, yaw, vyaw, ayaw, r1, r2, dz]
+ 0   1   2  3   4   5  6   7   8   9    10    11   12  13  14
+```
+
+这些索引在模型、测试和文档中多处引用；修改前必须全局搜索并补测试。
+
+## ROS2 接口
+
+订阅：
+
+- `/detector/armors` (`auto_aim_interfaces/msg/Armors`)：仿真器或检测器观测。
+- `/tracker/target` (`auto_aim_interfaces/msg/TrackerTarget`)：angle solver 输入。
+- `/send_pack` (`auto_aim_interfaces/msg/SendData`)：云台仿真输入。
+- `/recieve_pack` (`auto_aim_interfaces/msg/RecieveData`)：angle solver 反馈输入。
+
+发布：
+
+- `/detector/armors`：`armor_simulation_node` 发布带噪观测。
+- `/armor_simulation/ground_truth`：`armor_simulation_node` 发布真值。
+- `/simulation/marker`、`/simulation/image`：仿真可视化。
+- `/track_result`、`/track_result/marker`：传统滤波器输出。
+- `/graph_optimizer/armors`、`/graph_optimizer/marker`：图优化器或 jlu tracker 输出。
+- `/tracker/target`：图优化器或 jlu tracker 发布给 angle solver。
+- `/send_pack`：angle solver 或仿真真值瞄准模式发布给云台。
+- `/recieve_pack`：云台仿真反馈。
+
+## 仿真与相机约定
+
+- 装甲板局部坐标：`X=法线, Y=宽度, Z=高度`。
+- 角点顺序：`[左下, 左上, 右上, 右下]`。
+- 装甲板位置：
+
+```text
+pos = center - r * [cos(armor_yaw), sin(armor_yaw), 0]
+```
+
+- marker/观测 pitch 统一为 `+15 deg`。
+- `CameraModel::estimatePose()` 使用 OpenCV `SOLVEPNP_IPPE`。
+- 平面 PnP 仍可能有两个相近候选；仿真侧用 `correctPlanarPnPAmbiguity()` 按 yaw 先验修正。
+- 像素噪声：U 形距离模型 + 装甲板级相关噪声，`p_i' = p_i + n_c + n_i`。
+- `publish_gimbal_gt: true` 时，`armor_simulation_node` 直接向 `/send_pack` 发布真值 yaw/pitch，
+  绕过 tracker -> angle_solver 闭环；`gimbal_simulation` 仍只订阅 `/send_pack` 并发布 TF。
+
+## 配置文件
+
+原则：优先改 YAML，不改头文件默认值。
 
 | 文件 | 控制节点 | 关键参数 |
-|------|---------|---------|
-| `src/filter_test/config/config.yaml` | `/filter`, `/graph_optimizer_test`, `/gimbal_simulation` | 滤波器选择、过程/观测噪声、相机内参、2D/YPD 模式 |
-| `src/armor_simulation/config/simulation_config.yaml` | `/armor_simulation_node` | 初始状态、运动噪声、径向距离约束、运动限幅、几何参数、像素噪声 U 形模型、离群点 |
+| --- | --- | --- |
+| `src/filter_test/config/config.yaml` | `/filter`, `/graph_optimizer_test`, `/jlu_tracker`, `/gimbal_simulation` | 滤波器选择、过程/观测噪声、图优化噪声、smoother、相机内参、云台发布率。 |
+| `src/armor_simulation/config/simulation_config.yaml` | `/armor_simulation_node` | 初始状态、运动限制、几何参数、像素噪声、离群点、相机内参、图像发布、`publish_gimbal_gt`。 |
 
-**图优化关键参数** (`config.yaml` - `/graph_optimizer_test`)：
-- `use_2d_observation`: 观测模式 (true=两级像素, false=YPD)
-- `cold_start_frames`: 冷启动帧数 (前 N 帧只累积不优化)
-- `s2qxy/s2qz/s2qyaw/s2qr/s2qdz`: 过程噪声
-- `s2qvel/s2qvyaw`: per-group 运动因子中的速度方差
-- `vel_sigma/vyaw_sigma`: `VelSmoothFactor` / `VyawSmoothFactor` 标准差
-- `r_pose/r_distance/r_yaw`: YPD 观测噪声
-- `pixel_noise_std`: 像素噪声 σ
-- `geo_tangential/radial/height/yaw`: 几何约束噪声
-- `camera_fx/fy/cx/cy`, `distortion_k1/k2/p1/p2`: 相机参数 (外参从 TF 动态获取)
+图优化关键参数：
 
-**仿真/PnP 当前约定**：
-- 装甲板局部坐标: `X=法线, Y=宽度, Z=高度`; 角点顺序 `[左下, 左上, 右上, 右下]`
-- 仿真装甲板位置: `pos = center - r * [cos(armor_yaw), sin(armor_yaw)]`, 可视化 pitch 为 `+15°`
-- `CameraModel::estimatePose()` 使用 OpenCV `SOLVEPNP_IPPE`; 平面 PnP 仍可能有两个相近候选，仿真侧用 `correctPlanarPnPAmbiguity()` 按 yaw 先验修正
-- 像素噪声为 U 形距离模型 + 装甲板级相关噪声: `p_i' = p_i + n_c + n_i`, `pixel_noise_common_ratio` 越大 yaw 越稳
+- `cold_start_frames`
+- `smoother_lag`
+- `smoother_type`
+- `extra_iterations`
+- `relinearize_threshold`
+- `s2qxy`, `s2qz`, `s2qyaw`
+- `vel_sigma`, `vyaw_sigma`
+- `match_max_cost`
+- `pixel_noise_std`
+- `geo_tangential`, `geo_radial`, `geo_height`, `geo_yaw`
+- `camera_fx/fy/cx/cy`, `distortion_k1/k2/p1/p2`
+
+`use_2d_observation` 参数只为旧配置兼容保留；当前 typed pixel graph 路径固定启用。
 
 ## 依赖项
 
-- ROS2 Humble (rclcpp, tf2, geometry_msgs, visualization_msgs)
-- Eigen3, OpenCV, Ceres Solver
-- GTSAM 4.3 (iSAM2, Cal3DS2, PinholeCamera) — 装在 `/usr/local/lib`
-- auto_aim_interfaces
+- ROS2 Humble (`rclcpp`, `tf2_ros`, `geometry_msgs`, `visualization_msgs`, `sensor_msgs`)
+- Eigen3
+- OpenCV
+- Ceres Solver
+- GTSAM 4.3，默认在 `/usr/local/lib`
+- TBB
+- `auto_aim_interfaces`
 
 ## 约定
 
-- 头文件布局：`include/<package>/...` → 以 `"<package>/..."` 引入
-- 所有 launch 文件中 exec 输出：`output='screen'`
-- 构建产物 (`build/`、`install/`、`log/`) 和 `.vscode/` 已被 git 忽略 — 不要提交
-- 没有 CI 工作流；验证方式 = `colcon test` + 手动 launch
-- `.vscode/c_cpp_properties.json` 硬编码了 `/opt/ros/humble` 路径，如果 ROS 发行版不同需修改
-- 当前 git 状态有未跟踪文件 (`AGENTS.md`, `docs/`, `.bak`) 和未提交修改
+- 头文件布局：`include/<package>/...`，include 时使用 `"<package>/..."`。
+- launch 中节点输出使用 `output='screen'`。
+- 构建产物 (`build/`, `install/`, `log/`) 和 `.vscode/` 已被 git 忽略，不要提交。
+- ROS 消息生成在 `install/.../include/...`，不在 `src/`。
+- `.vscode/c_cpp_properties.json` 硬编码 `/opt/ros/humble`；换 ROS 发行版需要同步修改。
+- 没有 CI；验证方式是 `colcon test` 加必要的手动 launch。
+- 工作区可能有用户未提交改动，修改前先看 `git status --short`，不要回退他人改动。
 
 ## 已知问题
 
-- r2 过冲仍需重新调参；当前已有 `VelSmoothFactor`/`VyawSmoothFactor`，但半径估计仍依赖观测质量和几何约束
-- yaw 在部分传统滤波路径仍按平坦标量处理；图优化 `ArmorCenterFactor` 已对 yaw residual 做角度包裹
-- 匹配为启发式代价 (非马氏距离)
-- UKF 收敛速度比 EKF 慢
-- Singer 模型可能产生 NaN 值
+- `radius_2` 仍可能过冲，需要继续调参。
+- 传统滤波路径中 yaw 仍有按标量处理的遗留点；typed 图中 yaw 使用 `Rot2`。
+- 匹配是启发式代价，不是马氏距离。
+- UKF 收敛速度可能慢于 EKF。
+- Singer 模型在部分参数组合下可能产生 NaN。
+- `filter_test` 和 `auto_aim_interfaces` 的 package metadata 仍有 TODO license/description。

@@ -14,15 +14,9 @@ void declareTrackerParameters(rclcpp::Node& node) {
     node.declare_parameter("s2qxy", 0.1);
     node.declare_parameter("s2qz", 0.1);
     node.declare_parameter("s2qyaw", 0.1);
-    node.declare_parameter("s2qr", 10.0);
-    node.declare_parameter("s2qdz", 0.1);
-    node.declare_parameter("s2qvel", 0.1);
-    node.declare_parameter("s2qvyaw", 0.1);
     node.declare_parameter("vel_sigma", 0.01);
     node.declare_parameter("vyaw_sigma", 0.05);
-    node.declare_parameter("r_pose", 0.01);
-    node.declare_parameter("r_distance", 0.01);
-    node.declare_parameter("r_yaw", 0.01);
+    node.declare_parameter("match_max_cost", graph_optimizer::kDefaultArmorMatchMaxCost);
     node.declare_parameter("pixel_noise_std", 2.0);
     node.declare_parameter("geo_tangential", 0.01);
     node.declare_parameter("geo_radial", 0.03);
@@ -44,7 +38,6 @@ void declareTrackerParameters(rclcpp::Node& node) {
     node.declare_parameter("smoother_type", "incremental");
     node.declare_parameter("relinearize_threshold", 0.001);
     node.declare_parameter("extra_iterations", 2);
-    node.declare_parameter("max_window_frames", 500);
 }
 
 }  // namespace
@@ -71,27 +64,22 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
         "/graph_optimizer/marker", 10);
 
     RCLCPP_INFO(get_logger(), "Graph optimizer test initialized");
-    RCLCPP_INFO(get_logger(), "  use_2d_observation: %s",
-                tracker_config_.use_2d_observation ? "true" : "false");
+    const bool legacy_use_2d_observation =
+        get_parameter("use_2d_observation").as_bool();
+    RCLCPP_INFO(get_logger(), "  typed pixel graph enabled; use_2d_observation parameter kept for compatibility: %s",
+                legacy_use_2d_observation ? "true" : "false");
     RCLCPP_INFO(get_logger(), "  s2qxy: %.3f, s2qz: %.3f, s2qyaw: %.3f",
                 tracker_config_.s2qxy, tracker_config_.s2qz, tracker_config_.s2qyaw);
 }
 
 graph_optimizer::TrackerConfig GraphOptimizerTest::loadTrackerConfig() {
     graph_optimizer::TrackerConfig config;
-    config.use_2d_observation = get_parameter("use_2d_observation").as_bool();
     config.s2qxy = get_parameter("s2qxy").as_double();
     config.s2qz = get_parameter("s2qz").as_double();
     config.s2qyaw = get_parameter("s2qyaw").as_double();
-    config.s2qr = get_parameter("s2qr").as_double();
-    config.s2qdz = get_parameter("s2qdz").as_double();
-    config.s2qvel = get_parameter("s2qvel").as_double();
-    config.s2qvyaw = get_parameter("s2qvyaw").as_double();
     config.vel_sigma = get_parameter("vel_sigma").as_double();
     config.vyaw_sigma = get_parameter("vyaw_sigma").as_double();
-    config.r_pose = get_parameter("r_pose").as_double();
-    config.r_distance = get_parameter("r_distance").as_double();
-    config.r_yaw = get_parameter("r_yaw").as_double();
+    config.match_max_cost = get_parameter("match_max_cost").as_double();
     config.pixel_sigma = get_parameter("pixel_noise_std").as_double();
     config.geo_noise.tangential = get_parameter("geo_tangential").as_double();
     config.geo_noise.radial = get_parameter("geo_radial").as_double();
@@ -120,8 +108,9 @@ graph_optimizer::TrackerConfig GraphOptimizerTest::loadTrackerConfig() {
         : auto_graph::SmootherType::Incremental;
     config.optimizer.relinearize_threshold =
         get_parameter("relinearize_threshold").as_double();
-    config.optimizer.extra_iterations = get_parameter("extra_iterations").as_int();
-    config.optimizer.max_window_frames = get_parameter("max_window_frames").as_int();
+    // Keep the ROS parameter name for config compatibility; internally this is
+    // the total number of update calls per solve, including the first update.
+    config.optimizer.update_iterations = get_parameter("extra_iterations").as_int();
     return config;
 }
 
@@ -131,7 +120,7 @@ void GraphOptimizerTest::armorsCallback(
 
     const double dt = frame_time_.computeDt(msg->header.stamp);
     Eigen::Isometry3d T_camera_to_odom{Eigen::Isometry3d::Identity()};
-    if (tracker_config_.use_2d_observation && tracker_->initialized() &&
+    if (tracker_->initialized() &&
         !lookupCameraToOdom(msg->header.stamp, T_camera_to_odom)) {
         return;
     }

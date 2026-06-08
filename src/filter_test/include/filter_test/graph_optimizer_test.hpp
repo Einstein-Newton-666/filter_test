@@ -1,7 +1,6 @@
 #pragma once
 
-#include "filter_test/graph_optimizer/factors.hpp"
-#include "filter_test/graph_optimizer/tracker_core.hpp"
+#include "filter_test/graph_optimizer/armor_tracker.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
 
 #include <auto_aim_interfaces/msg/armors.hpp>
@@ -59,8 +58,3 @@ inline Eigen::Vector3d rotationMatrixToRPY(const Eigen::Matrix3d& R) {
 }
 
 }  // namespace filter_test
-
-using ArmorReprojFactor = filter_test::graph_optimizer::ArmorReprojFactor;
-using ArmorCenterFactor = filter_test::graph_optimizer::ArmorCenterFactor;
-using VelSmoothFactor = filter_test::graph_optimizer::VelSmoothFactor;
-using VyawSmoothFactor = filter_test::graph_optimizer::VyawSmoothFactor;

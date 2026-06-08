@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Graph Optimizer 当前架构与使用方法 — 因子图优化跟踪器</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d2991d; --red: #f85149;
+    --purple: #a371f7; --code-bg: #1c2128; --teal: #39c5cf;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1060px; margin: 0 auto; padding: 40px 20px;
+  }
+  h1 { font-size: 2em; margin-bottom: .3em; color: #fff; }
+  h2 { font-size: 1.4em; margin: 2em 0 .6em; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: #f0f6fc; }
+  h3 { font-size: 1.1em; margin: 1.5em 0 .4em; color: var(--accent); }
+  p { margin: .6em 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; color: var(--orange); }
+  pre { background: var(--code-bg); padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); font-size: .85em; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .doc-nav {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 24px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface);
+  }
+  .doc-link {
+    display: inline-flex; align-items: center; min-height: 32px;
+    padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font-size: .9em;
+  }
+  .doc-link.active {
+    border-color: var(--accent); color: #79c0ff; background: #1a2a3a;
+  }
+  .note { background: #1a2332; border-left: 3px solid var(--accent); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .highlight { background: #1a2a1a; border-left: 3px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .warn { background: #2a2210; border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: .9em; }
+  th, td { padding: 10px 14px; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--surface); font-weight: 600; }
+  tr:nth-child(even) { background: #0d1117; }
+  tr:nth-child(odd) { background: var(--surface); }
+
+  /* ── 架构图组件 ── */
+  .arch-layer {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    flex-wrap: wrap; margin: 6px 0;
+  }
+  .box {
+    padding: 10px 18px; border-radius: 10px; text-align: center;
+    font-weight: 600; font-size: .9em; border: 2px solid;
+  }
+  .box-ros    { background: #1a2a3a; border-color: #58a6ff; color: #79c0ff; }
+  .box-track  { background: #2a1a3a; border-color: #a371f7; color: #d2a8ff; }
+  .box-prob   { background: #1a3a2a; border-color: #3fb950; color: #7ee787; }
+  .box-core   { background: #3a2a1a; border-color: #d2991d; color: #f0c060; }
+  .box-gtsam  { background: #2a1a2a; border-color: #f778ba; color: #f0a0c0; }
+  .box-factor { background: #1a2a2a; border-color: #39c5cf; color: #7ee0e0; }
+  .box-data   { background: #2a2a1a; border-color: #8b949e; color: #c9d1d9; }
+
+  .arrow-d { color: var(--accent); font-size: 1.4em; font-weight: bold; }
+  .arrow-u { color: var(--orange); font-size: 1.4em; font-weight: bold; }
+
+  /* ── 流程图 ── */
+  .flow {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 16px 0; font-size: .85em; flex-wrap: wrap;
+  }
+  .flow-box {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 8px 14px; border-radius: 6px; text-align: center;
+  }
+  .flow-arrow { color: var(--accent); font-weight: bold; font-size: 1.2em; }
+
+  /* ── 文件树 ── */
+  .file-tree { font-family: 'JetBrains Mono', monospace; font-size: .82em; margin: 12px 0; }
+  .file-tree .dir { color: var(--accent); }
+  .file-tree .hpp { color: #7ee787; }
+  .file-tree .cpp { color: #d2a8ff; }
+  .file-tree .yaml { color: var(--orange); }
+  .file-tree .comment { color: var(--muted); }
+
+  /* ── 变量节点图 ── */
+  .var-graph { margin: 16px 0; }
+  .var-row { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+  .vnode {
+    background: #1a3a5c; color: #79c0ff; padding: 8px 14px; border-radius: 20px;
+    border: 2px solid #58a6ff; font-weight: 600; font-size: .85em;
+    font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+  }
+  .vnode-static {
+    background: #1a3a1a; color: #7ee787; padding: 8px 14px; border-radius: 20px;
+    border: 2px solid #3fb950; font-weight: 600; font-size: .85em;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .fnode {
+    background: #2a1a3c; color: #d2a8ff; padding: 6px 12px; border-radius: 4px;
+    border: 2px solid #a371f7; font-size: .78em; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+  }
+  .fnode-obs {
+    background: #1a2a2a; color: #7ee0e0; padding: 6px 12px; border-radius: 4px;
+    border: 2px solid #39c5cf; font-size: .78em; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+  }
+  .edge { color: var(--muted); font-size: 1em; }
+  .edge-label { color: var(--muted); font-size: .7em; }
+
+  /* ── 模板层级 ── */
+  .template-diagram {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    margin: 16px 0; font-size: .85em;
+  }
+  .tpl-box {
+    padding: 8px 16px; border-radius: 8px; border: 2px solid var(--border);
+    background: var(--surface); text-align: center;
+  }
+
+  ul { margin: .5em 0 .5em 20px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>Graph Optimizer 当前架构与使用方法</h1>
+<p style="color:var(--muted)">
+  版本 2.1 — <code>graph_core</code> 通用 GTSAM 封装 + <code>armor_model</code> 装甲板具体图模型 + <code>armor_tracker</code> 调用层<br>
+  当前主路径为 typed GTSAM graph，变量布局对齐 jlu_tracker，装甲板几何因子使用完整 Pose3 H1 4×6 雅可比
+</p>
+
+<nav class="doc-nav">
+  <a class="doc-link active" href="graph_optimizer_architecture.html">当前架构</a>
+  <a class="doc-link" href="factor_graph_optimization.html">因子图原理</a>
+  <a class="doc-link" href="gtsam_graph_optimizer_guide.html">GTSAM 使用指南</a>
+</nav>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>1. 整体分层架构</h2>
+
+<p>系统自上而下分为 <b>6 个抽象层</b>，每层职责清晰、低耦合：</p>
+
+<div class="template-diagram" style="gap:2px">
+
+  <div class="arch-layer">
+    <div class="box box-ros" style="min-width:280px">📡 ROS2 节点层<br><small>graph_optimizer_test.cpp<br>订阅 /detector/armors<br>发布 /graph_optimizer/armors</small></div>
+  </div>
+  <div style="color:var(--muted);font-size:1.2em">↓ 参数 + 观测</div>
+  <div class="arch-layer">
+    <div class="box box-track" style="min-width:280px">🎯 Tracker 门控层<br><small>ArmorGraphTracker<br>空帧过滤 / 失败恢复 / 结果封装</small></div>
+  </div>
+  <div style="color:var(--muted);font-size:1.2em">↓ TrackerFrameInput</div>
+  <div class="arch-layer">
+    <div class="box box-prob" style="min-width:280px">📦 CV Pixel Graph 封装层<br><small>ArmorCvPixelGraph<br>initialize / update / reset<br>runner + runtime 管理</small></div>
+  </div>
+  <div style="color:var(--muted);font-size:1.2em">↓ ArmorCvPixelFrameInput</div>
+  <div class="arch-layer">
+    <div class="box box-prob" style="min-width:280px">📐 Armor Problem 扩展层<br><small>ArmorCvPixelProblem<br>匹配 / factor / layout / output</small></div>
+  </div>
+  <div style="color:var(--muted);font-size:1.2em">↓ FrameContext 写入</div>
+  <div class="arch-layer">
+    <div class="box box-core" style="min-width:280px">⚙️ GraphOptimizer 核心层<br><small>GraphModelRunner / ModelSpec / FrameContext<br>ISAM2 / FixedLagSmoother</small></div>
+  </div>
+  <div style="color:var(--muted);font-size:1.2em">↓ GTSAM API</div>
+  <div class="arch-layer">
+    <div class="box box-gtsam" style="min-width:280px">🔢 GTSAM 4.3<br><small>ISAM2 / IncrementalFixedLagSmoother<br>BatchFixedLagSmoother / Cal3DS2 / Rot2 / Pose3</small></div>
+  </div>
+
+</div>
+
+<div class="note">
+  <strong>推荐入口：</strong>ROS 或上层业务代码使用 <code>ArmorGraphTracker</code>；需要直接操作 CV + 像素图时使用
+  <code>ArmorCvPixelGraph</code>。它内部通过 <code>GraphModelRunner&lt;ArmorCvPixelProblem&gt;</code> 自动编排执行流程：
+  <code>describe</code> → <code>initialize</code> → <code>beginFrame</code> → <code>addFrame</code> → <code>solve</code> → <code>makeOutput</code>。
+  自定义模型也应使用 <code>GraphModelRunner</code> 和 typed variable handle。
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>2. 文件组织结构</h2>
+
+<div class="file-tree">
+<pre><code>src/filter_test/
+├── <span class="dir">include/filter_test/</span>
+│   ├── graph_optimizer_test.hpp              <span class="comment">← ROS 节点声明 (薄层)</span>
+│   └── <span class="dir">graph_optimizer/</span>                    <span class="comment">← ★ 重构后的核心模块</span>
+│       ├── <span class="hpp">graph_core.hpp</span>                  <span class="comment">  ModelSpec + FrameContext + GraphOptimizer + GraphModelRunner</span>
+│       ├── <span class="hpp">graph_math.hpp</span>                  <span class="comment">  logistic 编码 / 角度工具 / 噪声工厂</span>
+│       ├── <span class="hpp">armor_model.hpp</span>                 <span class="comment">  装甲板状态 / 匹配 / factor / ArmorCvPixelProblem / ArmorCvPixelGraph</span>
+│       └── <span class="hpp">armor_tracker.hpp</span>               <span class="comment">  ArmorGraphTracker 薄调用层</span>
+│
+├── <span class="dir">src/</span>
+│   ├── graph_optimizer_test.cpp              <span class="comment">← ROS 节点实现 + main()</span>
+│   ├── <span class="dir">graph_optimizer/</span>
+│   │   ├── <span class="cpp">graph_core.cpp</span>                  <span class="comment">  GraphOptimizer 求解器实现</span>
+│   │   ├── <span class="cpp">armor_model.cpp</span>                 <span class="comment">  匹配算法 + 运动/几何/像素因子 + Problem/Graph facade 实现</span>
+│   │   └── <span class="cpp">armor_tracker.cpp</span>               <span class="comment">  空帧 / reset / graph 调用 / 结果封装</span>
+│   └── <span class="dir">jlu_tracker/</span>                        <span class="comment">← 参考实现 (独立代码路径)</span>
+│       ├── <span class="cpp">target.cpp</span>                       <span class="comment">  RobotTarget: 匹配 + 图构建 + ISAM2</span>
+│       ├── <span class="cpp">factors.cpp</span>                      <span class="comment">  7 个手写因子</span>
+│       └── ...
+│
+├── <span class="dir">config/</span>
+│   └── <span class="yaml">config.yaml</span>                        <span class="comment">  ROS 参数 (噪声 / 相机 / 求解器)</span>
+│
+└── <span class="dir">test/</span>
+    └── test_auto_graph_optimizer.cpp          <span class="comment"> 单元测试</span></code></pre>
+</div>
+
+<div class="highlight">
+  <strong>关键设计决策：</strong> <code>auto_graph</code> 命名空间 (graph_core.hpp) 完全与装甲板/相机/ROS 解耦。
+  它只理解"类型化变量"和"因子图求解器"——所以未来新的跟踪问题只需写一个新的 Model struct。
+</div>
+
+<h3>2.1 当前文件职责边界</h3>
+
+<table>
+<tr><th>文件</th><th>namespace</th><th>主要内容</th><th>不应该包含</th></tr>
+<tr>
+  <td><code>graph_core.hpp/cpp</code></td>
+  <td><code>auto_graph</code></td>
+  <td><code>Var</code>、<code>ModelSpec</code>、<code>InitContext</code>、<code>FrameContext</code>、<code>OutputContext</code>、<code>GraphOptimizer</code>、<code>GraphModelRunner</code></td>
+  <td>装甲板匹配、相机参数、ROS topic、具体模型状态</td>
+</tr>
+<tr>
+  <td><code>armor_model.hpp/cpp</code></td>
+  <td><code>filter_test::graph_optimizer</code></td>
+  <td><code>TrackerConfig</code>、<code>TrackerState</code>、<code>PredictedArmor</code>、匹配函数、typed 运动因子、<code>ArmorTypedReprojFactor</code>、两个几何因子、<code>ArmorCvPixelProblem</code>、<code>ArmorCvPixelGraph</code></td>
+  <td>ROS node 生命周期、topic 发布、TF 查询、通用求解器内部状态</td>
+</tr>
+<tr>
+  <td><code>armor_tracker.hpp/cpp</code></td>
+  <td><code>filter_test::graph_optimizer</code></td>
+  <td><code>TrackerFrameInput</code>、<code>TrackerUpdateResult</code>、<code>FrameTimeTracker</code>、<code>ArmorGraphTracker</code>，负责空帧处理、reset、<code>ArmorCvPixelGraph</code> 调用和结果封装</td>
+  <td>factor 具体残差、像素投影、layout 构建、ISAM2/fixed-lag 细节</td>
+</tr>
+<tr>
+  <td><code>graph_optimizer_test.cpp</code></td>
+  <td><code>filter_test</code></td>
+  <td>ROS 参数读取、TF 查询、订阅 <code>/detector/armors</code>、调用 <code>ArmorGraphTracker</code>、发布 <code>/graph_optimizer/armors</code> / marker / <code>/tracker/target</code></td>
+  <td>具体 factor 数学、GTSAM key 管理</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>推荐阅读顺序：</strong>想理解框架先看 <code>graph_core.hpp</code>；想理解当前装甲板模型先看
+  <code>armor_model.hpp</code> 再看 <code>armor_model.cpp::ArmorCvPixelProblem</code>；想理解 ROS 运行链路看
+  <code>armor_tracker.hpp/cpp</code> 和 <code>graph_optimizer_test.cpp</code>。
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>3. GraphModelRunner 模板的调用链路</h2>
+
+<div class="flow">
+  <div class="flow-box">📥 输入<br><small>ArmorCvPixelFrameInput</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">1️⃣ beginFrame(dt)<br><small>frame_id++<br>创建 FrameContext</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">2️⃣ addFrame<br><small>预测初值<br>+运动/观测因子</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">4️⃣ solve()<br><small>ISAM2 增量优化<br>或 FixedLagSmoother</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">5️⃣ makeOutput<br><small>提取估计值<br>更新 runtime 状态</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">📤 输出<br><small>ArmorCvPixelOutput</small></div>
+</div>
+
+<pre><code>template&lt;typename Model&gt;
+class GraphModelRunner {
+public:
+    void initialize(const typename Model::InitInput& input) {
+        InitContext ctx(spec_.layout());
+        Model::initialize(ctx, input, variables_);      <span class="comment">// ← Model 写 frame 0 初值和 prior</span>
+        auto initial = ctx.build();
+        optimizer_.initialize(spec_.layout(), initial.values, initial.graph);
+    }
+
+    typename Model::Output update(const typename Model::FrameInput& input) {
+        auto frame = optimizer_.beginFrame(input.dt);    <span class="comment">// ← 创建本帧 FrameContext</span>
+        Model::addFrame(frame, input, variables_);       <span class="comment">// ← Model 写初值和全部因子</span>
+        auto solve_result = optimizer_.solve();          <span class="comment">// ← optimizer 执行 ISAM2</span>
+        OutputContext out(optimizer_, solve_result, spec_.layout());
+        return Model::makeOutput(out, input, variables_);
+    }                                                    <span class="comment">// ← Model 提取后验</span>
+};</code></pre>
+
+<h3>3.1 推荐直接使用 ArmorCvPixelGraph</h3>
+
+<pre><code>filter_test::graph_optimizer::TrackerConfig config;
+config.optimizer.cold_start_frames = 3;
+
+filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+graph.initialize(first_armors_msg);
+
+auto output = graph.update(
+    armors_msg,
+    dt,
+    T_camera_to_odom);</code></pre>
+
+<p>
+实际 ROS 节点一般再包一层 <code>ArmorGraphTracker</code>，用于空帧过滤、全未匹配 reset 和发布层结果封装。
+自定义图优化模型应实现 <code>describe/initialize/addFrame/makeOutput</code> 并接入 <code>GraphModelRunner</code>。
+</p>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>4. ModelSpec 与 Var — 类型安全的变量注册</h2>
+
+<p>旧版 <code>VariableLayout</code> 使用 VectorXd 分块索引，手动管理偏移量容易出错。新版模型通过 <code>ModelSpec</code> 声明变量，并用 <code>Var&lt;T&gt;</code> 句柄在后续代码中引用变量：</p>
+
+<pre><code><span class="comment">// ArmorCvPixelProblem::describe() — 声明 7 组变量并返回 typed handle</span>
+struct Variables {
+    auto_graph::Var&lt;gtsam::Point3&gt; center;
+    auto_graph::Var&lt;gtsam::Vector3&gt; velocity;
+    auto_graph::Var&lt;gtsam::Rot2&gt; yaw;
+    auto_graph::Var&lt;double&gt; vyaw;
+    auto_graph::Var&lt;double&gt; radius_a;
+    auto_graph::Var&lt;double&gt; radius_b;
+    auto_graph::Var&lt;double&gt; dz;
+};
+
+static Variables describe(auto_graph::ModelSpec&amp; spec) {
+    return {
+        spec.dynamic&lt;gtsam::Point3&gt;("center", 'x'),
+        spec.dynamic&lt;gtsam::Vector3&gt;("velocity", 'v'),
+        spec.dynamic&lt;gtsam::Rot2&gt;("yaw", 'r'),
+        spec.dynamic&lt;double&gt;("vyaw", 'w'),
+        spec.staticVar&lt;double&gt;("radius_a", 'a'),
+        spec.staticVar&lt;double&gt;("radius_b", 'b'),
+        spec.staticVar&lt;double&gt;("dz", 'z')};
+}</code></pre>
+
+<table>
+<tr><th>变量</th><th>名字</th><th>GTSAM Key</th><th>C++ 类型</th><th>维度</th><th>动态/静态</th></tr>
+<tr><td>中心位置</td><td><code>center</code></td><td><code>Symbol('x', k)</code></td><td>Point3</td><td>3D</td><td>每帧</td></tr>
+<tr><td>中心速度</td><td><code>velocity</code></td><td><code>Symbol('v', k)</code></td><td>Vector3</td><td>3D</td><td>每帧</td></tr>
+<tr><td>朝向</td><td><code>yaw</code></td><td><code>Symbol('r', k)</code></td><td>Rot2</td><td>1D (流形)</td><td>每帧</td></tr>
+<tr><td>角速度</td><td><code>vyaw</code></td><td><code>Symbol('w', k)</code></td><td>double</td><td>1D</td><td>每帧</td></tr>
+<tr><td>半径 a</td><td><code>radius_a</code></td><td><code>Symbol('a', 0)</code></td><td>double</td><td>1D (logistic)</td><td><b>静态</b></td></tr>
+<tr><td>半径 b</td><td><code>radius_b</code></td><td><code>Symbol('b', 0)</code></td><td>double</td><td>1D (logistic)</td><td><b>静态</b></td></tr>
+<tr><td>高度差</td><td><code>dz</code></td><td><code>Symbol('z', 0)</code></td><td>double</td><td>1D</td><td><b>静态</b></td></tr>
+</table>
+
+<div class="highlight">
+  <strong>类型安全：</strong><code>FrameContext::insert(vars.center, val)</code> 从 <code>Var&lt;T&gt;</code> 得到变量名和类型。
+  如果底层 layout 类型不一致，会抛出 <code>runtime_error("variable 'center' requested with wrong type")</code>。
+</div>
+
+<h3>4.1 FrameContext 的使用约定</h3>
+
+<p><code>FrameContext</code> 是 Model 构建单帧图的入口。它不拥有优化器，只把本帧的初值和因子追加到 <code>GraphOptimizer</code> 的暂存区。</p>
+
+<table>
+<tr><th>接口</th><th>用途</th><th>典型使用位置</th></tr>
+<tr>
+  <td><code>insert(var, value)</code></td>
+  <td>插入 ModelSpec 中注册过的主变量初值，并检查 C++ 类型</td>
+  <td><code>ArmorCvPixelProblem::addFrame</code> 插入 <code>center/velocity/yaw/vyaw</code></td>
+</tr>
+<tr>
+  <td><code>insertKey&lt;T&gt;(key, value)</code></td>
+  <td>插入 Problem 自己生成的辅助变量，通常不在 layout 中注册</td>
+  <td>给每块匹配装甲板插入 <code>Pose3</code> key</td>
+</tr>
+<tr>
+  <td><code>addPrior(var, value, noise)</code></td>
+  <td>给 layout 主变量添加 prior</td>
+  <td>简单测试或初始化图</td>
+</tr>
+<tr>
+  <td><code>addPriorKey&lt;T&gt;(key, value, noise)</code></td>
+  <td>给自定义辅助 key 添加 prior</td>
+  <td>给装甲板 <code>Pose3</code> 添加局部锚点</td>
+</tr>
+<tr>
+  <td><code>addFactor&lt;Factor&gt;(...)</code></td>
+  <td>追加任意 GTSAM factor</td>
+  <td>运动因子、像素因子、几何因子</td>
+</tr>
+</table>
+
+<pre><code>void ArmorCvPixelProblem::addFrame(auto_graph::FrameContext& graph,
+                                  const FrameInput& input,
+                                  const Variables& vars) {
+    auto& state = input.runtime.state;
+    state.center += state.velocity * input.dt;
+    state.yaw += state.vyaw * input.dt;
+
+    graph.insert(vars.center, toPoint3(state.center));
+    graph.insert(vars.velocity, state.velocity);
+    graph.insert(vars.yaw, gtsam::Rot2::fromAngle(state.yaw));
+    graph.insert(vars.vyaw, state.vyaw);
+
+    const uint64_t k = graph.frameId();
+    graph.addFactor&lt;TranslationFactor&gt;(
+        translation_noise,
+        graph.key("center", k - 1), graph.key("velocity", k - 1),
+        graph.key("center", k), input.dt);
+}</code></pre>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>5. 单帧因子图结构</h2>
+
+<p>每帧增量图包含 <b>两层因子</b>：运动层（时间边）和观测层（测量边）。</p>
+
+<h3>5.1 运动层 — 4 个因子 (frame k)</h3>
+
+<div class="var-graph">
+
+  <div class="var-row" style="margin-bottom:12px">
+    <span style="color:var(--muted);font-size:.75em">帧 k-1</span>
+    <span style="width:60px"></span>
+    <span style="color:var(--muted);font-size:.75em">因子</span>
+    <span style="width:40px"></span>
+    <span style="color:var(--muted);font-size:.75em">帧 k</span>
+  </div>
+
+  <div class="var-row">
+    <span class="vnode">X(k-1)<br><small>Point3</small></span>
+    <span class="edge">────</span>
+    <span class="vnode">V(k-1)<br><small>Vector3</small></span>
+    <span class="edge">────</span>
+    <span class="fnode">Translation<br>Factor</span>
+    <span class="edge">──→</span>
+    <span class="vnode">X(k)<br><small>Point3</small></span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">∂error/∂X=-I</span>
+    <span style="width:30px"></span>
+    <span style="color:var(--muted);font-size:.65em">∂error/∂V=-dt·I</span>
+    <span style="width:80px"></span>
+    <span style="color:var(--muted);font-size:.65em">error=X(k)-X(k-1)-V(k-1)·dt</span>
+    <span style="width:20px"></span>
+    <span style="color:var(--muted);font-size:.65em">∂error/∂X_cur=+I</span>
+  </div>
+
+  <div class="var-row" style="margin-top:10px">
+    <span class="vnode">V(k-1)<br><small>Vector3</small></span>
+    <span class="edge">────────</span>
+    <span class="fnode">Velocity<br>Factor</span>
+    <span class="edge">──→</span>
+    <span class="vnode">V(k)<br><small>Vector3</small></span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">error=V(k)-V(k-1)</span>
+    <span style="width:60px"></span>
+    <span style="color:var(--muted);font-size:.65em">σ=0.01m/s (速度平滑)</span>
+  </div>
+
+  <div class="var-row" style="margin-top:10px">
+    <span class="vnode">R(k-1)<br><small>Rot2</small></span>
+    <span class="edge">────</span>
+    <span class="vnode">W(k-1)<br><small>double</small></span>
+    <span class="edge">────</span>
+    <span class="fnode">Yaw<br>Factor</span>
+    <span class="edge">──→</span>
+    <span class="vnode">R(k)<br><small>Rot2</small></span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">SO(2) 流形: localCoordinates</span>
+    <span style="width:100px"></span>
+    <span style="color:var(--muted);font-size:.65em">error=(R(k-1)*Rot2(W·dt)) ⊖ R(k)</span>
+  </div>
+
+  <div class="var-row" style="margin-top:10px">
+    <span class="vnode">W(k-1)<br><small>double</small></span>
+    <span class="edge">────────</span>
+    <span class="fnode">Vyaw<br>Factor</span>
+    <span class="edge">──→</span>
+    <span class="vnode">W(k)<br><small>double</small></span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">error=W(k)-W(k-1)</span>
+    <span style="width:60px"></span>
+    <span style="color:var(--muted);font-size:.65em">σ=0.05rad/s (角速度平滑)</span>
+  </div>
+
+</div>
+
+<div class="var-row" style="margin-top:16px; justify-content:flex-start; gap:16px">
+  <span style="color:var(--muted);font-size:.8em">静态变量 (只连观测层):</span>
+  <span class="vnode-static">A(0)<br><small>半径a</small></span>
+  <span class="vnode-static">B(0)<br><small>半径b</small></span>
+  <span class="vnode-static">Z(0)<br><small>高度差</small></span>
+</div>
+
+<h3>5.2 观测层 — 每块匹配装甲板 ~6 个因子</h3>
+
+<div class="var-graph">
+
+  <div class="var-row" style="margin-bottom:8px">
+    <span style="color:var(--muted);font-size:.75em">第一级: 像素重投影 (每个角点 1 个因子)</span>
+  </div>
+
+  <div class="var-row">
+    <span class="vnode">Pose3<br><small>armor_i</small></span>
+    <span class="edge">──→</span>
+    <span class="fnode-obs">Reproj<br>×4</span>
+    <span class="edge">→</span>
+    <span style="color:var(--orange);font-size:.8em">pixel_obs</span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">每个角点: project(pose, corner_local) - pixel_obs (2D)</span>
+  </div>
+
+  <div class="var-row" style="margin-top:12px;margin-bottom:8px">
+    <span style="color:var(--muted);font-size:.75em">第二级: 几何约束 (每块装甲板 1 个因子)</span>
+  </div>
+
+  <div class="var-row">
+    <span class="vnode">Pose3<br><small>armor_i</small></span>
+    <span class="fnode-obs">ArmorRadius<br>CenterZFactor</span>
+    <span class="edge">──→</span>
+    <span class="vnode-static">A(0)</span>
+    <span class="vnode">X(k)</span>
+    <span class="vnode">R(k)</span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">armor 0,2 (偶数): 4-key 约束 [切向=0, 径向=r1, z=0, yaw=center_yaw+I·π/2]</span>
+  </div>
+
+  <div class="var-row" style="margin-top:8px">
+    <span class="vnode">Pose3<br><small>armor_i</small></span>
+    <span class="fnode-obs">ArmorRadius<br>DZFactor</span>
+    <span class="edge">──→</span>
+    <span class="vnode-static">B(0)</span>
+    <span class="vnode-static">Z(0)</span>
+    <span class="vnode">X(k)</span>
+    <span class="vnode">R(k)</span>
+  </div>
+  <div class="var-row" style="margin-top:2px">
+    <span style="color:var(--muted);font-size:.65em">armor 1,3 (奇数): 5-key 约束 [切向=0, 径向=r2, z=dz, yaw=center_yaw+I·π/2]</span>
+  </div>
+
+</div>
+
+<div class="note">
+  <strong>两级观测结构的好处：</strong>
+  Pose3 作为"中间变量"——像素因子只连 Pose3，几何因子连接 Pose3 → 主状态。
+  这形成稀疏的连接模式：每个 Pose3 只有 1 个几何因子连接到 X/R/radius/dz，
+  而不是每个角点都直接连主状态（那样会产生 4× 的连接数）。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>6. 因子一览表</h2>
+
+<table>
+<tr><th>因子名</th><th>Keys</th><th>误差维度</th><th>噪声 σ</th><th>作用</th></tr>
+<tr>
+  <td><code>TranslationFactor</code></td>
+  <td>3</td><td>3D</td>
+  <td>√s2q ≈ 0.316m</td>
+  <td>X(k) = X(k-1) + V(k-1)·dt，匀速位置预测</td>
+</tr>
+<tr>
+  <td><code>VelocityFactor</code></td>
+  <td>2</td><td>3D</td>
+  <td>0.01m/s</td>
+  <td><b>V(k) ≈ V(k-1)</b>，速度随机游走正则化，保证速度可观测</td>
+</tr>
+<tr>
+  <td><code>YawFactor</code></td>
+  <td>3</td><td>1D</td>
+  <td>√s2qyaw</td>
+  <td>R(k) = R(k-1)·Rot2(W·dt)，SO(2) 流形包裹</td>
+</tr>
+<tr>
+  <td><code>VyawFactor</code></td>
+  <td>2</td><td>1D</td>
+  <td>0.05rad/s</td>
+  <td>W(k) ≈ W(k-1)，角速度平滑</td>
+</tr>
+<tr>
+  <td><code>ArmorTypedReprojFactor</code></td>
+  <td>1</td><td>2D</td>
+  <td>1.0px</td>
+  <td>project(pose, corner_local) - pixel_obs，每角点 × 4</td>
+</tr>
+<tr>
+  <td><code>ArmorRadiusCenterZFactor</code></td>
+  <td>4</td><td>4D</td>
+  <td>[0.01, 0.03, 0.01, 0.005]</td>
+  <td>armor 0,2: [切向, 径向, z, yaw] 几何约束</td>
+</tr>
+<tr>
+  <td><code>ArmorRadiusDZFactor</code></td>
+  <td>5</td><td>4D</td>
+  <td>[0.01, 0.03, 0.01, 0.005]</td>
+  <td>armor 1,3: [切向, 径向, z+dz, yaw] 几何约束</td>
+</tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>7. 几何约束因子详解</h2>
+
+<h3>7.1 装甲板几何关系</h3>
+
+<pre><code>4 块装甲板围绕中心 (俯视图), 相差 90°:
+
+          armor1 (r2, dz)
+               │
+    armor2 ─── ● ─── armor0 (r1)
+    (r1)        │        (r1)
+             armor3 (r2, dz)
+
+armor_position = center - r × [cos(armor_yaw), sin(armor_yaw)]
+armor_yaw      = center_yaw + index × 90°
+
+偶数装甲板 (0,2): 使用 radius_a (r1), 与中心同层 (z=0)
+奇数装甲板 (1,3): 使用 radius_b (r2), 比中心高 dz</code></pre>
+
+<h3>7.2 四个误差分量的物理含义</h3>
+
+<table>
+<tr><th>分量</th><th>公式</th><th>期望值</th><th>物理含义</th><th>控制变量</th></tr>
+<tr>
+  <td><b>切向</b></td>
+  <td><code>tx·dx + ty·dy</code></td>
+  <td>≈ 0</td>
+  <td>中心在装甲板宽度方向无偏移。tx,ty 是装甲板切线方向 (法线逆时针 90°)</td>
+  <td>center.x, center.y</td>
+</tr>
+<tr>
+  <td><b>径向</b></td>
+  <td><code>nx·dx + ny·dy - r</code></td>
+  <td>= r</td>
+  <td>中心沿法线到装甲板的距离 = logistic 编码的半径</td>
+  <td>center.x, center.y, radius</td>
+</tr>
+<tr>
+  <td><b>z</b></td>
+  <td><code>center_z - armor_z</code><br><code>center_z + dz - armor_z</code></td>
+  <td>= 0 / dz</td>
+  <td>偶数装甲板与中心同高；奇数装甲板比中心高 dz</td>
+  <td>center.z, dz</td>
+</tr>
+<tr>
+  <td><b>yaw</b></td>
+  <td><code>armor_yaw ⊖ pred_yaw</code></td>
+  <td>≈ 0</td>
+  <td>装甲板朝向 = center_yaw + index·90°。用 Rot2::localCoordinates (SO(2) 流形减法)</td>
+  <td>center_yaw</td>
+</tr>
+</table>
+
+<h3>7.3 logistic 半径编码</h3>
+
+<pre><code>物理半径 r ∈ [r_min, r_max] = [0.10, 0.60] m
+
+无界优化状态 u ∈ (-∞, +∞)
+         ↓ logisticFunction
+物理半径 r = r_min + (r_max - r_min) / (1 + exp(-u))
+
+雅可比链: ∂error/∂u = ∂error/∂r · ∂r/∂u
+         ∂r/∂u = (r_max - r_min) · s · (1-s)   其中 s = (r-r_min)/(r_max-r_min)
+
+当 r → r_min 或 r → r_max 时: ∂r/∂u → 0
+  → 优化器自动"软约束"半径不越界，不需要硬截断</code></pre>
+
+<h3>7.4 Pose3 H1 4×6 雅可比</h3>
+
+<p>
+当前 <code>ArmorRadiusCenterZFactor</code> 和 <code>ArmorRadiusDZFactor</code> 都对装甲板 <code>Pose3</code>
+提供完整 <code>H1</code>，维度为 <code>4×6</code>。6 列对应 GTSAM <code>Pose3::retract</code> 的局部扰动顺序：
+前三列是旋转扰动，后三列是平移扰动。
+</p>
+
+<pre><code>H1 = [
+  ∂tangential / ∂rot(3), ∂tangential / ∂trans(3)
+  ∂radial     / ∂rot(3), ∂radial     / ∂trans(3)
+  ∂z          / ∂rot(3), ∂z          / ∂trans(3)
+  ∂yaw        / ∂rot(3), ∂yaw        / ∂trans(3)
+]</code></pre>
+
+<p>
+实现位于 <code>armor_model.cpp::armorPoseGeometryJacobian()</code>。平移部分通过
+<code>J_position * armor_pose_odom.rotation()</code> 把 Pose3 局部平移扰动映射到 odom 系；
+旋转部分通过 RPY yaw 对局部角速度的链式导数影响 tangential/radial/yaw 残差。
+</p>
+
+<div class="highlight">
+  <strong>验证方式：</strong>单元测试
+  <code>RadiusCenterZFactorPoseJacobianMatchesFiniteDifference</code> 和
+  <code>RadiusDZFactorPoseJacobianMatchesFiniteDifference</code> 使用非单位 <code>T_camera_to_odom</code>
+  对 H1 的 6 列逐列做有限差分检查。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>8. 求解器架构 (3 种后端)</h2>
+
+<table>
+<tr><th>后端</th><th>触发条件</th><th>适用场景</th><th>性能</th></tr>
+<tr>
+  <td><b>ISAM2</b></td>
+  <td><code>smoother_lag ≤ 0</code></td>
+  <td>无限历史, 离线精度最高</td>
+  <td>增量 O(m'), m'=受影响变量数</td>
+</tr>
+<tr>
+  <td><b>IncrementalFixedLagSmoother</b></td>
+  <td><code>smoother_lag > 0 &amp;&amp; type=incremental</code></td>
+  <td>固定窗口, 在线实时</td>
+  <td>增量 + 边缘化 O(window)</td>
+</tr>
+<tr>
+  <td><b>BatchFixedLagSmoother</b></td>
+  <td><code>smoother_lag > 0 &amp;&amp; type=batch</code></td>
+  <td>固定窗口, LM 批量优化</td>
+  <td>批量 LM, 更慢但更鲁棒</td>
+</tr>
+</table>
+
+<div class="warn">
+  <strong>静态 key 重打时间戳：</strong> FixedLagSmoother 按时间戳边缘化旧变量。
+  <code>radius_a / radius_b / dz</code> 是静态参数（只有 frame 0 一个 key），
+  如果不每帧刷新时间戳，它们会在 smoother_lag 帧后被边缘化 →
+  几何约束失去连接 → 优化发散。solve() 中显式重打时间戳解决此问题。
+</div>
+
+<h3>8.1 cold start 与失败处理</h3>
+
+<table>
+<tr><th>阶段</th><th>GraphOptimizer 行为</th><th>Tracker 行为</th></tr>
+<tr>
+  <td>第一帧初始化</td>
+  <td><code>Problem::initialize</code> 创建 frame 0 初值和 prior 图，不执行当前帧运动边</td>
+  <td><code>accepted_frame=true</code>，<code>solved=false</code>，输出基于初始化状态的预测装甲板</td>
+</tr>
+<tr>
+  <td>cold start</td>
+  <td><code>cold_start_count_ &lt; cold_start_frames</code> 时累计初值和因子，不提前优化</td>
+  <td>保持预测状态连续输出，<code>cold_start=true</code></td>
+</tr>
+<tr>
+  <td>正常优化</td>
+  <td>iSAM2 或 fixed-lag smoother 更新 <code>latest_estimate_</code></td>
+  <td><code>makeOutput</code> 用 estimate 覆盖 runtime 状态，并提交 last armor index</td>
+</tr>
+<tr>
+  <td>求解失败</td>
+  <td><code>SolveResult.failed=true</code>，错误文本写入 <code>error_message</code></td>
+  <td>不 reset 生命周期，只把失败状态返回给发布层</td>
+</tr>
+<tr>
+  <td>所有观测都未匹配</td>
+  <td>本帧没有有效装甲板几何连接</td>
+  <td><code>ArmorGraphTracker::reset()</code>，下一帧重新初始化，避免错匹配污染半径和 dz</td>
+</tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>9. 新版 vs 旧版 vs jlu 对比</h2>
+
+<table>
+<tr><th>特性</th><th>旧版 graph_optimizer_test</th><th>jlu_tracker (参考)</th><th>新版 graph_optimizer</th></tr>
+<tr>
+  <td><b>变量布局</b></td>
+  <td>4 组合并 Vector<br>pos_vel(6D) + yaw_vyaw(2D) + r(2D) + dz(1D)</td>
+  <td>7 组独立 GTSAM 类型<br>X/V/R/W/A/B/Z</td>
+  <td>7 组独立 GTSAM 类型<br>X/V/R/W/A/B/Z ✅</td>
+</tr>
+<tr>
+  <td><b>变量管理</b></td>
+  <td>手写偏移索引<br>(易出错)</td>
+  <td>手写 Symbol key</td>
+  <td>TypedKeyLayout 类型安全 ✅</td>
+</tr>
+<tr>
+  <td><b>运动因子</b></td>
+  <td>SingleMotionFactor (autodiff)<br>2-key 合并运动</td>
+  <td>Translation + Velocity + Yaw + Vyaw<br>4 个手写因子</td>
+  <td>Translation + Velocity + Yaw + Vyaw<br>4 个手写因子 ✅</td>
+</tr>
+<tr>
+  <td><b>雅可比</b></td>
+  <td>ceres::Jet autodiff</td>
+  <td>手写 (H1/H2/...)</td>
+  <td>手写 (H1/H2/...) ✅</td>
+</tr>
+<tr>
+  <td><b>Cholesky 复杂度</b></td>
+  <td>6³ = 216 (pos_vel 合并)</td>
+  <td>3³+3³ = 54 (分离)</td>
+  <td>3³+3³ = 54 (分离) ✅</td>
+</tr>
+<tr>
+  <td><b>求解器</b></td>
+  <td>ISAM2 + FixedLagSmoother</td>
+  <td>纯 ISAM2</td>
+  <td>ISAM2 + Inc/Batch FixedLag ✅</td>
+</tr>
+<tr>
+  <td><b>马氏距离匹配</b></td>
+  <td>❌ 启发式代价</td>
+  <td>✅ YPD 空间 + 边际协方差</td>
+  <td>❌ 启发式代价 + 最大代价门控</td>
+</tr>
+<tr>
+  <td><b>NIS 异常检测</b></td>
+  <td>❌</td>
+  <td>✅ χ²(4) + 滑动窗口</td>
+  <td>❌ (待移植)</td>
+</tr>
+<tr>
+  <td><b>几何因子雅可比</b></td>
+  <td>H1 置零 (简化)</td>
+  <td>完整 H1 4×6 (rot+trans)</td>
+  <td>完整 H1 4×6 (rot+trans) ✅</td>
+</tr>
+<tr>
+  <td><b>模型扩展</b></td>
+  <td>修改 optimizer 内部</td>
+  <td>修改 RobotTarget 类</td>
+  <td>实现新 Problem struct ✅</td>
+</tr>
+</table>
+
+<div class="highlight">
+  <strong>核心改进：</strong> 新版在保持与 jlu 相同稀疏变量布局的同时，通过 <code>GraphModelRunner&lt;Model&gt;</code> 模板实现了模型的热插拔。
+  新增一个跟踪模型（如 CV 以外的运动模型、不同的传感器配置）只需写一个 ~200 行的 Problem struct。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>10. 使用方法</h2>
+
+<h3>10.1 ROS 节点运行</h3>
+
+<p>完整仿真链路仍通过 launch 文件启动。图优化节点名是 <code>graph_optimizer_test</code>，外部 topic/message 接口保持不变。</p>
+
+<pre><code># 必填：GTSAM 4.3 安装在 /usr/local/lib 时需要加入运行时链接路径
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+source install/setup.bash
+
+# 完整启动 simulation + filter + graph optimizer + angle solver
+ros2 launch filter_test filter_test.launch.py
+
+# 单独运行图优化节点
+ros2 run filter_test graph_optimizer_test</code></pre>
+
+<table>
+<tr><th>Topic</th><th>方向</th><th>类型</th><th>说明</th></tr>
+<tr>
+  <td><code>/detector/armors</code></td>
+  <td>订阅</td>
+  <td><code>auto_aim_interfaces/msg/Armors</code></td>
+  <td>输入装甲板观测，包含 pose、yaw、角点像素等</td>
+</tr>
+<tr>
+  <td><code>/graph_optimizer/armors</code></td>
+  <td>发布</td>
+  <td><code>auto_aim_interfaces/msg/Armors</code></td>
+  <td>图优化输出的预测装甲板状态</td>
+</tr>
+<tr>
+  <td><code>/graph_optimizer/marker</code></td>
+  <td>发布</td>
+  <td><code>visualization_msgs/msg/MarkerArray</code></td>
+  <td>RViz 可视化 marker</td>
+</tr>
+<tr>
+  <td><code>/tracker/target</code></td>
+  <td>发布</td>
+  <td><code>auto_aim_interfaces/msg/TrackerTarget</code></td>
+  <td>与原 tracker 兼容的目标输出</td>
+</tr>
+</table>
+
+<h3>10.2 关键配置参数</h3>
+
+<p>配置入口是 <code>src/filter_test/config/config.yaml</code> 的 <code>/graph_optimizer_test</code> 节点参数。当前 typed pixel graph 固定启用，<code>use_2d_observation</code> 只保留为兼容旧命令行的 no-op 参数。</p>
+
+<table>
+<tr><th>参数</th><th>写入位置</th><th>影响</th></tr>
+<tr>
+  <td><code>s2qxy / s2qz / s2qyaw</code></td>
+  <td><code>TrackerConfig</code> → <code>addMotion</code></td>
+  <td>位置/yaw 积分运动因子的过程噪声方差，代码中会转为 sigma</td>
+</tr>
+<tr>
+  <td><code>vel_sigma / vyaw_sigma</code></td>
+  <td><code>VelocityFactor</code> / <code>VyawFactor</code></td>
+  <td>速度和角速度随机游走强度，越小越平滑，越大越容易跟随突变</td>
+</tr>
+<tr>
+  <td><code>match_max_cost</code></td>
+  <td><code>matchArmorIndicesUnique</code></td>
+  <td>匹配门控阈值；过大的观测会被标记为 <code>-1</code>，全未匹配帧触发 reset</td>
+</tr>
+<tr>
+  <td><code>pixel_noise_std</code></td>
+  <td><code>ArmorTypedReprojFactor</code></td>
+  <td>角点像素重投影残差噪声，单位 px</td>
+</tr>
+<tr>
+  <td><code>geo_tangential / geo_radial / geo_height / geo_yaw</code></td>
+  <td><code>ArmorRadiusCenterZFactor</code> / <code>ArmorRadiusDZFactor</code></td>
+  <td>几何约束四维残差噪声；半径和 dz 收敛很依赖这些权重</td>
+</tr>
+<tr>
+  <td><code>camera_fx/fy/cx/cy</code> 与畸变参数</td>
+  <td><code>ArmorTypedReprojFactor</code></td>
+  <td>GTSAM <code>Cal3DS2</code> 投影模型使用的相机内参</td>
+</tr>
+<tr>
+  <td><code>cold_start_frames</code></td>
+  <td><code>GraphOptimizerConfig</code></td>
+  <td>前 N 帧只累计因子，不优化；用于给 iSAM2 更稳定的初始图</td>
+</tr>
+<tr>
+  <td><code>smoother_lag / smoother_type</code></td>
+  <td><code>GraphOptimizer</code></td>
+  <td>选择纯 iSAM2 或 fixed-lag smoother；<code>smoother_lag &lt;= 0</code> 时使用 iSAM2</td>
+</tr>
+</table>
+
+<h3>10.3 在 C++ 中直接使用 ArmorGraphTracker</h3>
+
+<p><code>ArmorGraphTracker</code> 是推荐给 ROS node 或上层业务调用的接口。它隐藏 <code>ArmorCvPixelGraph</code>、runner/runtime、初始化和 reset 细节。</p>
+
+<pre><code>#include "filter_test/graph_optimizer/armor_tracker.hpp"
+
+filter_test::graph_optimizer::TrackerConfig config;
+config.optimizer.cold_start_frames = 3;
+config.match_max_cost = 1.5;
+
+filter_test::graph_optimizer::ArmorGraphTracker tracker(config);
+
+filter_test::graph_optimizer::TrackerFrameInput input{
+    armors_msg,           // const auto_aim_interfaces::msg::Armors&
+    dt,                   // double, seconds
+    T_camera_to_odom      // Eigen::Isometry3d
+};
+
+auto result = tracker.update(input);
+if (!result.accepted_frame) {
+    // 空帧或全未匹配帧。全未匹配时 tracker 内部已 reset，下帧会重新初始化。
+    return;
+}
+if (result.solve_failed) {
+    // 可读取 result.solve_error；当前 tracker 生命周期仍保留。
+    return;
+}
+
+const auto& state = result.state;
+const auto& armors = result.predicted_armors;</code></pre>
+
+<h3>10.4 新增自定义模型</h3>
+
+<p>新增模型时不要改 <code>GraphOptimizer</code>。创建新的 Model 类型，实现与 <code>ArmorCvPixelProblem</code> 相同的 <code>describe/initialize/addFrame/makeOutput</code> 接口，然后在 graph facade、tracker 或测试中接入 <code>GraphModelRunner</code>。</p>
+
+<pre><code>struct MyModel {
+    using InitInput = MyInitInput;
+    using FrameInput = MyFrameInput;
+    using Output = MyOutput;
+
+    struct Variables {
+        auto_graph::Var&lt;gtsam::Point3&gt; center;
+    };
+
+    static Variables describe(auto_graph::ModelSpec& spec);
+    static void initialize(auto_graph::InitContext& ctx,
+                           const InitInput& input,
+                           const Variables& vars);
+    static void addFrame(auto_graph::FrameContext& graph,
+                         const FrameInput& input,
+                         const Variables& vars);
+    static Output makeOutput(const auto_graph::OutputContext& ctx,
+                             const FrameInput& input,
+                             const Variables& vars);
+};
+
+auto_graph::GraphModelRunner&lt;MyModel&gt; runner(config.optimizer);</code></pre>
+
+<div class="note">
+  <strong>拆分建议：</strong>如果新模型仍是装甲板跟踪但观测不同，优先新建 <code>armor_xxx_model.hpp/cpp</code>；
+  如果是完全不同对象，保留 <code>graph_core</code>，新建独立的 <code>xxx_model</code> 和薄 tracker。
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<h2>11. 数据流全景图</h2>
+
+<pre><code>┌─────────────────────────────────────────────────────────────────────┐
+│ ROS 层 (graph_optimizer_test.cpp)                                   │
+│                                                                     │
+│  /detector/armors ──→ armorsCallback(msg)                           │
+│                          │                                          │
+│                          ├─ dt = frame_time_.computeDt(stamp)        │
+│                          ├─ T_camera_to_odom = TF lookup             │
+│                          └─ tracker_-&gt;update({msg, dt, TF})         │
+│                               │                                     │
+│  ┌────────────────────────────┼─────────────────────────────────┐   │
+│  │ ArmorGraphTracker          │                                  │   │
+│  │                            ▼                                  │   │
+│  │  if (空观测) → 返回 accepted=false                            │   │
+│  │  if (未初始化) → initialize(armors) → 返回                    │   │
+│  │  else → graph_.update(msg, dt, TF)                             │   │
+│  │            │                                                  │   │
+│  │  ArmorCvPixelGraph: 管理 runner/runtime，组装输入      │   │
+│  │            │                                                  │   │
+│  │  ┌─────────┼──────────────────────────────────────────┐       │   │
+│  │  │ GraphModelRunner&lt;ArmorCvPixelProblem&gt;             │       │   │
+│  │  │         │                                          │       │   │
+│  │  │  1. beginFrame(dt) → FrameContext                  │       │   │
+│  │  │  2. addFrame(graph, input, vars)                   │       │   │
+│  │  │     ├─ 显式预测: state += velocity*dt             │       │   │
+│  │  │     ├─ insert center/velocity/yaw/vyaw 初值       │       │   │
+│  │  │     ├─ TranslationFactor(x_pre,v_pre,x_cur,dt)    │       │   │
+│  │  │     ├─ VelocityFactor(v_pre,v_cur)                │       │   │
+│  │  │     ├─ YawFactor(r_pre,w_pre,r_cur,dt)            │       │   │
+│  │  │     └─ VyawFactor(w_pre,w_cur)                    │       │   │
+│  │  │                                                   │       │   │
+│  │  │     ├─ matchArmorIndicesUnique() → matched_indices │       │   │
+│  │  │     └─ for each matched armor:                     │       │   │
+│  │  │         ├─ insertKey Pose3(armor_pose)            │       │   │
+│  │  │         ├─ addPrior Pose3                         │       │   │
+│  │  │         ├─ 4× ArmorTypedReprojFactor              │       │   │
+│  │  │         └─ 1× ArmorRadiusCenterZ/DZFactor         │       │   │
+│  │  │                                                   │       │   │
+│  │  │  4. solve()                                       │       │   │
+│  │  │     ├─ cold_start? → return (不优化)              │       │   │
+│  │  │     ├─ ISAM2.update(graph, values)                │       │   │
+│  │  │     └─ latest_estimate_ = calculateEstimate()     │       │   │
+│  │  │                                                   │       │   │
+│  │  │  5. makeOutput(optimizer, solve_result, input)    │       │   │
+│  │  │     └─ estimate&lt;Point3&gt;("center",k) → TrackerState│       │   │
+│  │  └──────────────────────────────────────────────────┘       │   │
+│  │                            │                                  │   │
+│  │  返回 TrackerUpdateResult { accepted, solved, state, ... }   │   │
+│  └────────────────────────────┼─────────────────────────────────┘   │
+│                               │                                     │
+│  ┌────────────────────────────┼─────────────────────────────────┐   │
+│  │ 发布层                      ▼                                  │   │
+│  │  ├─ publishResult()      → /graph_optimizer/armors            │   │
+│  │  ├─ publishMarkers()     → /graph_optimizer/marker            │   │
+│  │  └─ publishTrackerTarget() → /tracker/target                  │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘</code></pre>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>12. 与 jlu_tracker 的代码路径对比</h2>
+
+<p>两个 tracker 共享相同的因子图结构和 GTSAM 后端，但代码组织不同：</p>
+
+<table>
+<tr><th></th><th>jlu_tracker</th><th>新版 graph_optimizer</th></tr>
+<tr>
+  <td><b>入口</b></td>
+  <td><code>jlu_tracker_node.cpp</code></td>
+  <td><code>graph_optimizer_test.cpp</code></td>
+</tr>
+<tr>
+  <td><b>跟踪器类</b></td>
+  <td><code>jlu::RobotTarget</code> — 单体类，包含所有逻辑</td>
+  <td><code>ArmorGraphTracker</code> — 薄壳层, 委托给 <code>ArmorCvPixelGraph</code></td>
+</tr>
+<tr>
+  <td><b>因子定义</b></td>
+  <td><code>jlu_tracker/factors.cpp</code></td>
+  <td><code>graph_optimizer/armor_model.cpp</code></td>
+</tr>
+<tr>
+  <td><b>匹配算法</b></td>
+  <td>马氏距离 + unique match + NIS</td>
+  <td>启发式代价 + unique match</td>
+</tr>
+<tr>
+  <td><b>几何因子 H1</b></td>
+  <td>完整 4×6 (旋转+平移)</td>
+  <td>完整 4×6 (旋转+平移)</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>共享的数学工具：</strong> <code>auto_graph::logisticFunction</code>、<code>auto_graph::logisticDerivative</code>、
+  <code>auto_graph::shortestAngularDistance</code>、<code>auto_graph::diagonalNoise</code> 等定义在
+  <code>graph_math.hpp</code> 的 <code>auto_graph</code> 命名空间中，jlu_tracker 也通过 include 复用这些函数。
+</div>
+
+<script>
+document.querySelectorAll('h2,h3').forEach(h => {
+  h.style.cursor = 'pointer';
+  h.addEventListener('click', () => {
+    h.scrollIntoView({ behavior: 'smooth' });
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ROS 2 最近版本更新详解 — Lyrical / Kilted / Jazzy / Humble</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #111827; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d2991d; --red: #f85149;
+    --purple: #a371f7; --code-bg: #1c2128; --teal: #39c5cf;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.72;
+    max-width: 1120px; margin: 0 auto; padding: 40px 20px;
+  }
+  h1 { font-size: 2em; margin-bottom: .35em; color: #fff; letter-spacing: 0; }
+  h2 { font-size: 1.42em; margin: 2.1em 0 .7em; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: #f0f6fc; }
+  h3 { font-size: 1.1em; margin: 1.55em 0 .45em; color: var(--accent); }
+  h4 { font-size: 1em; margin: 1.2em 0 .35em; color: #f0f6fc; }
+  p { margin: .62em 0; }
+  a { color: #79c0ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: .88em; background: var(--code-bg); padding: 1px 5px;
+    border-radius: 4px; color: var(--orange);
+  }
+  pre {
+    background: var(--code-bg); padding: 16px; border-radius: 8px; overflow-x: auto;
+    margin: 12px 0; border: 1px solid var(--border); font-size: .85em; line-height: 1.52;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: .9em; }
+  th, td { padding: 10px 12px; text-align: left; vertical-align: top; border: 1px solid var(--border); }
+  th { background: var(--surface); font-weight: 600; color: #f0f6fc; }
+  tr:nth-child(even) { background: #0d1117; }
+  tr:nth-child(odd) { background: var(--surface2); }
+  ul, ol { margin: .55em 0 .55em 22px; }
+  li { margin: 4px 0; }
+  .lead { color: var(--muted); font-size: 1.02em; }
+  .note { background: #1a2332; border-left: 3px solid var(--accent); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .highlight { background: #1a2a1a; border-left: 3px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .warn { background: #2a2210; border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 12px; margin: 16px 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .card strong { color: #fff; }
+  .tag {
+    display: inline-block; padding: 1px 7px; border: 1px solid var(--border);
+    border-radius: 999px; color: var(--muted); font-size: .78em; margin-right: 6px;
+  }
+  .tag-lts { border-color: var(--green); color: #7ee787; }
+  .tag-new { border-color: var(--accent); color: #79c0ff; }
+  .tag-risk { border-color: var(--orange); color: #f0c060; }
+  .flow {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    flex-wrap: wrap; margin: 18px 0; font-size: .86em;
+  }
+  .flow-box {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 9px 13px; border-radius: 6px; text-align: center;
+  }
+  .flow-arrow { color: var(--accent); font-weight: 700; font-size: 1.15em; }
+  .layers { margin: 18px 0; }
+  .layer {
+    display: grid; grid-template-columns: 190px 1fr; gap: 12px; align-items: stretch;
+    margin: 8px 0;
+  }
+  .layer-name {
+    background: #1a2a3a; border: 1px solid #58a6ff; color: #79c0ff;
+    border-radius: 8px; padding: 10px 12px; font-weight: 600;
+  }
+  .layer-body {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .mini { color: var(--muted); font-size: .88em; }
+  .toc {
+    display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0 8px;
+  }
+  .toc a {
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+    background: var(--surface); color: var(--text); font-size: .9em;
+  }
+  .src-list li { word-break: break-all; }
+  @media (max-width: 720px) {
+    body { padding: 28px 14px; }
+    .layer { grid-template-columns: 1fr; }
+    table { font-size: .82em; }
+    th, td { padding: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>ROS 2 最近版本更新详解</h1>
+<p class="lead">
+  从 Humble 到 Jazzy、Kilted、Lyrical，再到 Rolling：这不是简单的版本号变化，而是 ROS 2 在
+  执行器、RMW 通信、rosbag2、launch、参数系统、Gazebo 集成和可观测性上的持续演进。
+</p>
+
+<div class="note">
+  <strong>时间点说明：</strong>本文按 2026-06-07 可查的 ROS 官方文档整理。
+  你的 Humble 工作区当前运行 ROS 2 Humble，因此页面会同时标出“新版本能力”和“Humble 下可落地的写法”。
+</div>
+
+<div class="toc">
+  <a href="#timeline">版本时间线</a>
+  <a href="#architecture">核心原理</a>
+  <a href="#lyrical">Lyrical</a>
+  <a href="#kilted">Kilted</a>
+  <a href="#jazzy">Jazzy</a>
+  <a href="#humble">Humble</a>
+  <a href="#rolling">Rolling</a>
+  <a href="#code">代码示例</a>
+  <a href="#migration">迁移建议</a>
+  <a href="#sources">官方资料</a>
+</div>
+
+<h2 id="timeline">1. 版本时间线与定位</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>发行版</th>
+      <th>发布时间</th>
+      <th>定位</th>
+      <th>平台重点</th>
+      <th>通信中间件重点</th>
+      <th>Gazebo 关系</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Lyrical Luth</strong><br><code>lyrical</code></td>
+      <td>2026-05</td>
+      <td><span class="tag tag-lts">最新稳定版</span>面向新项目的长期技术基线</td>
+      <td>官方支持平台以 release 页面和 supported-platforms 页面为准，延续 Noble 世代平台方向</td>
+      <td><code>rmw_fastrtps_cpp</code> 仍是主路径之一；<code>rmw_zenoh_cpp</code> 继续增强</td>
+      <td>延续“每个 ROS 2 发行版绑定推荐 Gazebo 发行版”的模式</td>
+    </tr>
+    <tr>
+      <td><strong>Kilted Kaiju</strong><br><code>kilted</code></td>
+      <td>2025-05</td>
+      <td><span class="tag tag-new">非 LTS 稳定版</span>承接 Jazzy 后的新功能落地</td>
+      <td>Tier 1: Ubuntu 24.04 Noble amd64/arm64、Windows 10 amd64；Tier 2: RHEL 9</td>
+      <td>官方页面列出 <code>rmw_fastrtps_cpp*</code> 为默认；<code>rmw_zenoh_cpp</code> 达到 Tier 1</td>
+      <td>推荐 Gazebo Ionic</td>
+    </tr>
+    <tr>
+      <td><strong>Jazzy Jalisco</strong><br><code>jazzy</code></td>
+      <td>2024-05</td>
+      <td><span class="tag tag-lts">LTS</span>Humble 后的现代 LTS 基线</td>
+      <td>Tier 1: Ubuntu 24.04 Noble amd64/arm64、Windows 10 amd64；Tier 2: RHEL 9</td>
+      <td>官方页面列出 <code>rmw_fastrtps_cpp*</code> 为默认，CycloneDDS/Connext/GurumDDS 等按平台支持</td>
+      <td>推荐 Gazebo Harmonic，新增 <code>gz_*_vendor</code> 包作为 ROS 依赖入口</td>
+    </tr>
+    <tr>
+      <td><strong>Humble Hawksbill</strong><br><code>humble</code></td>
+      <td>2022-05</td>
+      <td><span class="tag tag-lts">LTS</span>Ubuntu 22.04 时代最常见生产基线</td>
+      <td>Tier 1: Ubuntu 22.04 Jammy amd64/arm64、Windows 10 amd64；Tier 2: RHEL 8</td>
+      <td>官方页面列出 <code>rmw_fastrtps_cpp*</code> 为默认，支持 CycloneDDS、Connext、FastDDS dynamic 等</td>
+      <td>Gazebo Classic 与 Ignition/Gazebo 过渡期</td>
+    </tr>
+    <tr>
+      <td><strong>Rolling Ridley</strong><br><code>rolling</code></td>
+      <td>持续滚动</td>
+      <td><span class="tag tag-risk">开发发行版</span>新 API 先进入 Rolling，再冻结到稳定版</td>
+      <td>随开发周期变化，官方页面当前列出 Noble/Windows 等目标</td>
+      <td>用于提前验证 RMW、API、工具链变化</td>
+      <td>随下一稳定版目标移动</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <strong>不要把 Rolling 当生产发行版。</strong>Rolling 的价值是提前适配、验证和贡献补丁；
+  真正部署机器人时应选择 LTS 或明确支持周期的稳定发行版。
+</div>
+
+<h2 id="architecture">2. 更新背后的 ROS 2 核心原理</h2>
+
+<p>
+  ROS 2 的版本更新通常不是“某个命令多了一个参数”这么简单。很多变化都来自下面这条链路：
+</p>
+
+<div class="flow">
+  <div class="flow-box">应用节点<br><code>rclcpp</code> / <code>rclpy</code></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">ROS Client Library<br>参数 / executor / callback</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">RCL / RMW<br>统一抽象层</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">DDS / Zenoh<br>发现、QoS、序列化、传输</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-box">工具链<br>launch / rosbag2 / RViz / CLI</div>
+</div>
+
+<div class="layers">
+  <div class="layer">
+    <div class="layer-name">Executor</div>
+    <div class="layer-body">
+      executor 决定 callback 何时被取出、在哪个线程执行、是否按事件驱动唤醒。
+      新版本持续减少无意义的 wait set 重建和轮询，让高频感知节点更少占 CPU。
+    </div>
+  </div>
+  <div class="layer">
+    <div class="layer-name">RMW</div>
+    <div class="layer-body">
+      RMW 是 ROS API 和具体中间件之间的适配层。同一个 <code>create_publisher</code> 可以跑在
+      Fast DDS、Cyclone DDS、Connext 或 Zenoh 上，差异主要落在发现机制、QoS 能力、零拷贝和安全特性。
+    </div>
+  </div>
+  <div class="layer">
+    <div class="layer-name">rosbag2</div>
+    <div class="layer-body">
+      rosbag2 不是简单的“写文件工具”，它同时依赖类型支持、QoS、时间戳、服务/动作 introspection 和存储插件。
+      所以 Jazzy 之后能录 service，Kilted 之后能录 action，Lyrical 继续增强远程控制和丢包观测。
+    </div>
+  </div>
+  <div class="layer">
+    <div class="layer-name">launch</div>
+    <div class="layer-body">
+      launch 是运行时组合系统。参数文件、命名空间、组件容器、日志等级、事件处理和 substitution
+      都在这里汇合，适合管理一整套感知、定位、规划或自瞄 pipeline。
+    </div>
+  </div>
+</div>
+
+<h2 id="lyrical">3. Lyrical Luth：2026 的最新稳定能力</h2>
+
+<p>
+  Lyrical 的更新重点是“更低开销的执行、更强的可观测性、更灵活的运行时工具”。它对实时感知系统尤其有意义：
+  高频相机、PnP、滤波器、图优化、云台控制这些节点通常对 CPU 抖动和数据记录可靠性敏感。
+</p>
+
+<div class="grid">
+  <div class="card">
+    <strong>Callback Group Events Executor</strong>
+    <p>这是 <code>rclcpp</code> 的新 executor 方向。它把“不断扫描所有实体是否 ready”的模式，推进到事件队列驱动；官方说明相对传统 single/multithreaded executor 可降低 CPU 使用。</p>
+  </div>
+  <div class="card">
+    <strong><code>rclpy</code> AsyncNode</strong>
+    <p>Python 节点可以把 asyncio event loop 纳入 ROS 节点模型，在 service、timer、subscription callback 中自然使用 <code>await</code>。</p>
+  </div>
+  <div class="card">
+    <strong><code>rosidl::Buffer</code></strong>
+    <p>面向高带宽数据的零拷贝/少拷贝路线，尤其适合图像、点云、GPU buffer 等 <code>uint8[]</code> 数据。</p>
+  </div>
+  <div class="card">
+    <strong>rosbag2 远程控制和丢包观测</strong>
+    <p>录包可以通过 ROS service 控制；同时发布消息丢失统计，方便发现“以为录到了，实际丢了”的问题。</p>
+  </div>
+</div>
+
+<h3>3.1 Events executor 的原理</h3>
+<p>
+  传统 executor 会构造 wait set，把 subscription、timer、service、action 等实体放进去等待。
+  当实体很多、callback group 多、节点组合复杂时，重复收集实体和唤醒扫描会有额外开销。
+  Events executor 的思路是把 ready 事件排队，executor 从队列消费事件，再调度对应 callback。
+</p>
+
+<pre><code class="language-cpp">// Lyrical 思路示例：事件驱动 executor，具体类名按对应发行版头文件为准。
+#include &lt;rclcpp/rclcpp.hpp&gt;
+
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared&lt;rclcpp::Node&gt;("events_executor_demo");
+
+  auto group = node-&gt;create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = group;
+
+  auto sub = node-&gt;create_subscription&lt;std_msgs::msg::String&gt;(
+    "/debug_text", rclcpp::QoS(10),
+    [](std_msgs::msg::String::ConstSharedPtr msg) {
+      RCLCPP_INFO(rclcpp::get_logger("events_executor_demo"), "%s", msg-&gt;data.c_str());
+    },
+    options);
+
+  // 新版可使用 EventsCBGExecutor 一类的事件 executor。
+  // rclcpp::executors::EventsCBGExecutor executor;
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
+  rclcpp::shutdown();
+}</code></pre>
+
+<h3>3.2 rosbag2 从“命令行工具”变成“可控记录服务”</h3>
+<p>
+  对机器人实验来说，bag 的核心问题不是“能不能保存”，而是“关键事故前后的数据是否完整、是否知道丢没丢”。
+  Lyrical 的 rosbag2 服务控制、循环录制、split 命名和 message-loss observability 都围绕这个问题。
+</p>
+
+<pre><code class="language-bash"># Lyrical: 录包过程可通过服务远程控制，适合调试站或上位机控制。
+ros2 bag record /camera/image_raw /tf /detector/armors
+ros2 service list | grep rosbag2
+
+# 统计消息丢失事件，便于在高带宽图像链路中提前发现记录风险。
+ros2 topic echo /events/rosbag2_messages_lost</code></pre>
+
+<h2 id="kilted">4. Kilted Kaiju：动作 introspection、Zenoh Tier 1 与 Windows 工具链变化</h2>
+
+<p>
+  Kilted 的技术重心是把 Jazzy 引入的 introspection、rosbag2 和新平台工作继续往前推。
+  对实际工程比较关键的点有三个：action 数据可以被工具链理解，<code>rmw_zenoh_cpp</code> 成为 Tier 1，
+  Windows 安装路线转向 Pixi/Conda。
+</p>
+
+<table>
+  <thead>
+    <tr><th>模块</th><th>更新点</th><th>工程意义</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ros2cli</code></td>
+      <td><code>ros2 action echo</code> 等 action introspection 能力</td>
+      <td>调试导航、机械臂、自瞄行为树时，可以像 echo topic 一样观察 action goal/result/feedback。</td>
+    </tr>
+    <tr>
+      <td><code>rosbag2</code></td>
+      <td>支持记录和回放 action 数据，支持按 sent/received 顺序播放等选项</td>
+      <td>能完整复现“发送目标、反馈、取消、结果”的行为序列，不再只靠 topic 侧面推断。</td>
+    </tr>
+    <tr>
+      <td><code>rclpy</code></td>
+      <td>ActionClient/ActionServer 类型标注、pub/sub/client/server 泛型支持</td>
+      <td>Python 项目可以用 mypy/ament_mypy 更早发现类型错误。</td>
+    </tr>
+    <tr>
+      <td><code>rmw_zenoh_cpp</code></td>
+      <td>进入 Tier 1</td>
+      <td>Zenoh 从实验路线变成官方重点支持的 RMW 之一，适合跨网段、边缘网络和非纯 DDS 网络探索。</td>
+    </tr>
+    <tr>
+      <td><code>rosidl_rust</code></td>
+      <td>Rust IDL generator 进入默认代码生成器列表</td>
+      <td>为 Rust 节点和工具链生态铺路。</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>4.1 为什么 action 录包比 topic 录包复杂</h3>
+<p>
+  Action 在 ROS 2 里不是单个 topic，而是一组 service + topic 的协议组合：
+  goal service、result service、cancel service、feedback topic、status topic。
+  rosbag2 要录 action，必须理解这些实体属于同一个 action 名称，并能在回放时重建时序关系。
+</p>
+
+<pre><code class="language-bash"># Kilted: action introspection 方向
+ros2 action list
+ros2 action info /navigate_to_pose
+ros2 action echo /navigate_to_pose
+
+# Kilted: rosbag2 支持 action 数据记录/回放
+ros2 bag record --all
+ros2 bag info ./my_bag --sort name
+ros2 bag play ./my_bag --message-order sent</code></pre>
+
+<h2 id="jazzy">5. Jazzy Jalisco：现代 LTS 基线与 Gazebo 集成重整</h2>
+
+<p>
+  Jazzy 是 Humble 之后最重要的 LTS 基线。它的更新不只是包版本升级，还明确改变了 ROS 2 与 Gazebo 的集成方式：
+  每个 ROS 2 发行版对应推荐 Gazebo 发行版，Jazzy 推荐 Gazebo Harmonic，并提供
+  <code>gz_common_vendor</code>、<code>gz_math_vendor</code>、<code>gz_sim_vendor</code>、<code>sdformat_vendor</code>
+  等 vendor 包，方便 ROS 包通过 rosdep/apt/CMake 消费 Gazebo 依赖。
+</p>
+
+<div class="highlight">
+  <strong>对仿真项目的影响：</strong>如果你的仿真节点依赖 Gazebo 库，Jazzy 之后更推荐依赖 ROS 发行版内的
+  <code>gz_*_vendor</code> 包，而不是让每个项目自己追 Gazebo upstream 的版本组合。
+</div>
+
+<h3>5.1 Jazzy 重点更新</h3>
+<ul>
+  <li><code>image_transport</code> 支持自定义 QoS，并可在运行时禁用特定 plugin。</li>
+  <li><code>message_filters</code> 支持 Type Adaptation，过滤链可以处理适配后的类型。</li>
+  <li><code>rcl</code> 增加 type description service，节点可暴露自身类型描述，契合 REP 2016。</li>
+  <li><code>rclpy</code> 增加 <code>ParameterEventHandler</code>，Python 节点更容易监听参数变化。</li>
+  <li><code>rosbag2</code> 支持 service recording/playback，MCAP 中可保留更完整时间戳和 metadata。</li>
+  <li><code>rviz2</code> 增强 TF frame 过滤、时间重置、显示能力。</li>
+  <li><code>rclcpp</code> executor 修复数据竞争，并调整 wait set 使用方式。</li>
+</ul>
+
+<h3>5.2 Service introspection 和 rosbag2 的关系</h3>
+<p>
+  Topic 是持续数据流，天然适合录包；service 是请求-响应 RPC，传统 bag 只录 topic 无法完整复盘一次服务调用。
+  Jazzy 的 service recording/playback 建立在 Service Introspection 之上，能够把 request/response 也纳入记录。
+</p>
+
+<pre><code class="language-bash"># Jazzy: 记录 service 数据
+ros2 bag record --all-services
+
+# 同时记录 topic 和 service
+ros2 bag record --all --all-services
+
+# 回放包含 service 数据的 bag
+ros2 bag play ./service_debug_bag</code></pre>
+
+<h3>5.3 Type description 为什么重要</h3>
+<p>
+  早期工具要理解消息类型，通常依赖本机已经安装对应 interface package。
+  Type description service 让节点能够提供“我发布/订阅/服务使用的类型长什么样”的描述。
+  这有利于动态工具、跨语言绑定、bag metadata 和运行时 introspection。
+</p>
+
+<pre><code class="language-cpp">// Jazzy 思路示例：工具可以通过节点提供的 get_type_description 服务理解接口类型。
+// 实际服务由 rcl/rclcpp/rclpy 节点基础设施提供，应用侧通常不需要手写服务端。
+// 对调试工具、录包工具、桥接工具来说，这比只知道 "std_msgs/msg/String" 更有信息量。</code></pre>
+
+<h2 id="humble">6. Humble Hawksbill：你当前工作区的基础能力</h2>
+
+<p>
+  Humble 是 Ubuntu 22.04 上最常见的 ROS 2 LTS，也是本工作区的发行版。
+  它已经具备很多现代 ROS 2 能力：Content Filtered Topics、launch 参数增强、SROS2 CRL、
+  rosbag2 snapshot/burst/convert、loaned message 控制、Python lifecycle node 等。
+</p>
+
+<h3>6.1 Humble 对 C++ 包结构的影响</h3>
+<p>
+  Humble release notes 明确提到 C++ headers 安装到子目录。这也解释了本工作区的约定：
+  头文件布局使用 <code>include/&lt;package&gt;/...</code>，引用写成 <code>"filter_test/..."</code>。
+  这能避免多个包把同名头文件安装到同一 include 根目录下产生冲突。
+</p>
+
+<pre><code class="language-cmake"># Humble 及之后推荐的包内头文件布局
+target_include_directories(graph_optimizer_test
+  PUBLIC
+    $&lt;BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include&gt;
+    $&lt;INSTALL_INTERFACE:include&gt;)
+
+install(DIRECTORY include/
+  DESTINATION include)</code></pre>
+
+<h3>6.2 Content Filtered Topics 的原理</h3>
+<p>
+  普通 subscription 会把 topic 上的所有样本交给订阅者，应用层再丢弃不关心的数据。
+  Content Filtered Topics 把过滤表达式下推到中间件：如果 RMW 支持，订阅端可以声明“只要满足条件的样本”。
+  这能降低网络传输、反序列化和 callback 压力。
+</p>
+
+<pre><code class="language-cpp">// Humble 已引入 CFT 概念；具体 API 和 RMW 支持情况需要按发行版确认。
+// 思路：订阅方声明过滤表达式，让底层 DDS/RMW 尽量只传递匹配样本。
+auto qos = rclcpp::QoS(10).reliable();
+auto sub = node-&gt;create_subscription&lt;auto_aim_interfaces::msg::Armors&gt;(
+  "/detector/armors", qos,
+  [](auto_aim_interfaces::msg::Armors::ConstSharedPtr msg) {
+    // 如果底层不支持 CFT，仍然可以在 callback 中做应用层过滤。
+    for (const auto & armor : msg-&gt;armors) {
+      if (armor.number == "3") {
+        // 只处理目标装甲板
+      }
+    }
+  });</code></pre>
+
+<h3>6.3 Humble 下本工作区的常用命令</h3>
+<pre><code class="language-bash"># 编译当前三个包
+colcon build --packages-select armor_simulation filter_test auto_aim_interfaces
+
+# GTSAM 4.3 在 /usr/local/lib，运行前补链接路径
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+source install/setup.bash
+
+# 启动完整链路
+ros2 launch filter_test filter_test.launch.py
+
+# 观察图优化输出
+ros2 topic echo /graph_optimizer/armors
+ros2 topic hz /detector/armors</code></pre>
+
+<h2 id="rolling">7. Rolling Ridley：提前适配下一代 ROS 2</h2>
+
+<p>
+  Rolling 是持续滚动开发版。新功能通常先进入 Rolling，经过一段时间的 ABI/API 冻结、测试和平台同步后，
+  再成为下一个稳定发行版的一部分。它适合以下场景：
+</p>
+
+<ul>
+  <li>你维护的包要提前兼容下一版 ROS 2。</li>
+  <li>你需要验证新 RMW、新 executor、新 rosbag2 功能是否解决当前瓶颈。</li>
+  <li>你要向 ROS 2 上游提交修复，必须在最新开发分支复现问题。</li>
+</ul>
+
+<div class="warn">
+  <strong>工程建议：</strong>生产机器人不要直接依赖 Rolling。可以用 Rolling 建独立 CI job 或容器，
+  做“提前发现未来迁移问题”的验证，而不是替代 Humble/Jazzy/Lyrical 的部署环境。
+</div>
+
+<h2 id="code">8. 具体代码和配置示例</h2>
+
+<h3>8.1 QoS：传感器流和可靠控制流要分开</h3>
+<p>
+  ROS 2 的 QoS 是 DDS/RMW 能力向应用层暴露的核心接口。图像、点云这类高频数据通常倾向
+  <code>SensorDataQoS</code>；控制命令、目标状态、参数事件通常更关注可靠性。
+</p>
+
+<pre><code class="language-cpp">auto image_sub = node-&gt;create_subscription&lt;sensor_msgs::msg::Image&gt;(
+  "/camera/image_raw",
+  rclcpp::SensorDataQoS(),
+  [](sensor_msgs::msg::Image::ConstSharedPtr image) {
+    // 高频图像：允许丢旧帧，减少排队延迟。
+  });
+
+auto target_pub = node-&gt;create_publisher&lt;auto_aim_interfaces::msg::TrackerTarget&gt;(
+  "/tracker/target",
+  rclcpp::QoS(10).reliable().transient_local());</code></pre>
+
+<h3>8.2 Callback group：把耗时计算和控制回调隔离</h3>
+<p>
+  在装甲板跟踪中，PnP、EKF/UKF、GTSAM 更新可能耗时；云台控制 timer 又希望稳定触发。
+  可以用 callback group 把不同工作分组，再用 MultiThreadedExecutor 或新版本 executor 调度。
+</p>
+
+<pre><code class="language-cpp">auto heavy_group =
+  node-&gt;create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+auto control_group =
+  node-&gt;create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+rclcpp::SubscriptionOptions sub_options;
+sub_options.callback_group = heavy_group;
+
+auto armors_sub = node-&gt;create_subscription&lt;auto_aim_interfaces::msg::Armors&gt;(
+  "/detector/armors", rclcpp::SensorDataQoS(),
+  [this](auto_aim_interfaces::msg::Armors::ConstSharedPtr msg) {
+    tracker_.update(*msg);  // 可能包含滤波或图优化
+  },
+  sub_options);
+
+auto timer = node-&gt;create_wall_timer(
+  std::chrono::milliseconds(5),
+  [this]() { publish_control_command(); },
+  control_group);</code></pre>
+
+<h3>8.3 参数 descriptor：把配置约束写进节点</h3>
+<p>
+  Lyrical 增强了数组参数的范围检查；但在 Humble/Jazzy 中，标量参数 descriptor 已经很实用。
+  它让 <code>ros2 param describe</code> 能看到约束，也能在 set 参数时做边界校验。
+</p>
+
+<pre><code class="language-cpp">rcl_interfaces::msg::ParameterDescriptor desc;
+desc.description = "Pixel observation noise standard deviation.";
+
+rcl_interfaces::msg::FloatingPointRange range;
+range.from_value = 0.1;
+range.to_value = 20.0;
+range.step = 0.0;
+desc.floating_point_range.push_back(range);
+
+double pixel_sigma = node-&gt;declare_parameter("pixel_sigma", 2.0, desc);</code></pre>
+
+<h3>8.4 Launch：参数文件、日志等级和组合节点</h3>
+<p>
+  launch 的价值是把“怎么运行系统”变成可审查的代码。Humble 已支持大量 launch_ros 能力，
+  Lyrical 又增加了 XML/YAML launch substitutions 和 per-message log severity。
+</p>
+
+<pre><code class="language-python"># launch/vision_debug.launch.py
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    use_2d = LaunchConfiguration('use_2d_observation')
+
+    return LaunchDescription([
+        DeclareLaunchArgument('use_2d_observation', default_value='true'),
+        Node(
+            package='filter_test',
+            executable='graph_optimizer_test',
+            name='graph_optimizer_test',
+            output='screen',
+            parameters=[
+                'src/filter_test/config/config.yaml',
+                {'use_2d_observation': use_2d},
+            ],
+            arguments=['--ros-args', '--log-level', 'info'],
+        ),
+    ])</code></pre>
+
+<h3>8.5 rclpy 参数事件：Python 工具节点监听配置变化</h3>
+<p>
+  Jazzy 的 <code>ParameterEventHandler</code> 让 Python 调试工具更容易响应参数变化。
+  例如调试时动态观察滤波器模型、观测模式或噪声参数是否被改动。
+</p>
+
+<pre><code class="language-python">import rclpy
+from rclpy.node import Node
+from rclpy.parameter_event_handler import ParameterEventHandler
+
+class ParamWatch(Node):
+    def __init__(self):
+        super().__init__('param_watch')
+        self.handler = ParameterEventHandler(self)
+        self.callback_handle = self.handler.add_parameter_callback(
+            parameter_name='use_2d_observation',
+            node_name='/graph_optimizer_test',
+            callback=lambda p: self.get_logger().info(f'use_2d_observation={p.value}'))
+
+rclpy.init()
+rclpy.spin(ParamWatch())
+rclpy.shutdown()</code></pre>
+
+<h3>8.6 rosbag2：按问题类型选择录制策略</h3>
+<table>
+  <thead>
+    <tr><th>调试目标</th><th>推荐录制内容</th><th>原因</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>图优化结果跳变</td>
+      <td><code>/detector/armors</code>、<code>/graph_optimizer/armors</code>、<code>/tf</code>、参数 dump</td>
+      <td>需要同时复盘观测、输出和坐标变换。</td>
+    </tr>
+    <tr>
+      <td>云台闭环异常</td>
+      <td>目标、云台状态、控制命令、仿真 ground truth</td>
+      <td>区分“估计错”和“控制错”。</td>
+    </tr>
+    <tr>
+      <td>服务/action 异常</td>
+      <td>Jazzy/Kilted 后记录 service/action introspection 数据</td>
+      <td>能复盘 request、response、goal、feedback、result。</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code class="language-bash"># Humble 可用：高频感知链路基础录包
+ros2 bag record /detector/armors /graph_optimizer/armors /tf /tf_static
+
+# Humble 可用：快速看频率和延迟趋势
+ros2 topic hz /detector/armors
+ros2 topic bw /camera/image_raw
+
+# Jazzy/Kilted/Lyrical 方向：service/action 也进入 rosbag2 调试范围
+ros2 bag record --all --all-services
+ros2 bag play ./debug_bag --start-paused</code></pre>
+
+<h3>8.7 切换 RMW 做对比实验</h3>
+<p>
+  RMW 切换是 ROS 2 很有价值的诊断手段。相同应用代码在不同 RMW 下的发现速度、CPU 占用、
+  QoS 支持和跨网络表现可能不同。切换时要确保对应 RMW 包已安装。
+</p>
+
+<pre><code class="language-bash"># Fast DDS，Humble/Jazzy/Kilted 默认主路径
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 run filter_test graph_optimizer_test
+
+# Cyclone DDS，对延迟和发现行为做对比
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ros2 run filter_test graph_optimizer_test
+
+# Kilted 后 rmw_zenoh_cpp 成为 Tier 1，可用于跨网络/边缘网络实验
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+ros2 run filter_test graph_optimizer_test</code></pre>
+
+<h2 id="migration">9. 从 Humble 迁移到 Jazzy/Kilted/Lyrical 的建议</h2>
+
+<ol>
+  <li><strong>先升级平台假设：</strong>Humble 主平台是 Ubuntu 22.04，Jazzy/Kilted 转向 Ubuntu 24.04。不要只改 <code>ROS_DISTRO</code>，还要检查 OpenCV、GTSAM、Gazebo、编译器和 Python 版本。</li>
+  <li><strong>检查头文件和 CMake：</strong>保持 <code>include/&lt;package&gt;/...</code> 布局，避免依赖偶然 include path。Kilted 中 <code>ament_target_dependencies</code> 已进入 deprecated 路线，长期应更偏向现代 CMake target。</li>
+  <li><strong>把 rosbag2 当成测试工具：</strong>迁移前后录同一段仿真数据，比较输出 topic、频率、时间戳和丢包情况。</li>
+  <li><strong>明确 RMW 矩阵：</strong>至少测试默认 Fast DDS；如果项目有跨机通信或网络复杂环境，再加入 CycloneDDS/Zenoh 对比。</li>
+  <li><strong>Gazebo 依赖按发行版重审：</strong>Jazzy 推荐 Harmonic，Kilted 推荐 Ionic。仿真包不要混用未经验证的 Gazebo/ROS 组合。</li>
+  <li><strong>先迁工具节点，再迁实时链路：</strong>CLI、launch、rosbag2、RViz、Python 调试工具一般更容易迁；核心滤波和图优化节点最后迁，并用 bag 回放做回归。</li>
+</ol>
+
+<div class="highlight">
+  <strong>对本仓库的直接建议：</strong>当前工程仍以 Humble 为准时，不要为了追新版本改动核心跟踪逻辑。
+  可以先新增 Jazzy/Lyrical 的文档和迁移分支，等 GTSAM、OpenCV、Gazebo 和自定义消息链路都验证后再切主开发环境。
+</div>
+
+<h2 id="sources">10. 官方资料入口</h2>
+
+<p>本文使用以下 ROS 官方文档页面核对版本和更新点：</p>
+<ul class="src-list">
+  <li><a href="https://docs.ros.org/en/rolling/Releases.html">ROS 2 Distributions</a></li>
+  <li><a href="https://docs.ros.org/en/rolling/Releases/Release-Lyrical-Luth.html">Lyrical Luth release notes</a></li>
+  <li><a href="https://docs.ros.org/en/rolling/Releases/lyrical/supported-platforms.html">Lyrical Luth supported platforms</a></li>
+  <li><a href="https://docs.ros.org/en/rolling/Releases/Release-Kilted-Kaiju.html">Kilted Kaiju release notes</a></li>
+  <li><a href="https://docs.ros.org/en/rolling/Releases/Release-Jazzy-Jalisco.html">Jazzy Jalisco release notes</a></li>
+  <li><a href="https://docs.ros.org/en/rolling/Releases/Release-Humble-Hawksbill.html">Humble Hawksbill release notes</a></li>
+  <li><a href="https://docs.ros.org/en/rolling/Releases/Release-Rolling-Ridley.html">Rolling Ridley release notes</a></li>
+</ul>
+
+<p class="mini">
+  备注：ROS 2 发行版文档会随补丁和平台支持策略更新。写迁移方案时，应重新打开对应 release note 和 supported platforms 页面确认。
+</p>
+
+</body>
+</html>

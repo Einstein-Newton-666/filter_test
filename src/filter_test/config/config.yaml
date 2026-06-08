@@ -35,28 +35,17 @@
 
 /graph_optimizer_test:
   ros__parameters:
-    # 观测模式选择
-    use_2d_observation: true  # true=两级像素观测(多装甲板)，false=YPD几何观测
-
     verbose: false            # 关闭 [GO] 调试输出
 
     # CV模型过程噪声参数 (对角噪声: 方差)
     s2qxy: 0.1         # σ_pos=0.32m (松噪声适应 6D 密集团结构)
     s2qz: 0.1          # σ_pos_z=0.32m
     s2qyaw: 0.1        # σ_yaw=0.32rad
-    s2qr: 10.0
-    s2qdz: 0.1
 
-    # 速度平滑噪声 (对角噪声模型: 方差)
-    s2qvel: 0.0001      # σ_vel=0.01m/s (对齐 jlu velocity_factor_noise)
-    s2qvyaw: 0.0025     # σ_vyaw=0.05rad/s (对齐 jlu vyaw_factor_noise)
-    vel_sigma: 0.01     # VelSmoothFactor 标准差
-    vyaw_sigma: 0.05    # VyawSmoothFactor 标准差
-
-    # 仿真模式R参数
-    r_pose: 0.001
-    r_distance: 0.001
-    r_yaw: 0.01
+    # 速度平滑噪声
+    vel_sigma: 0.01
+    vyaw_sigma: 0.05
+    match_max_cost: 1.5     # yaw_diff + 3*pos_err，超过则拒绝观测，避免错配污染 r/dz
 
     # 像素噪声（用于2D观测模式）
     pixel_noise_std: 1.0
@@ -67,8 +56,7 @@
     # 固定滞后平滑器: 0=纯iSAM2无边际化, N=保留N帧
     smoother_lag: 10.0        # 0=纯ISAM2 (先验证收敛)
     smoother_type: "incremental"  # "incremental" (iSAM2,快) 或 "batch" (LM,稳)
-    extra_iterations: 2      # 每次update后额外iSAM2迭代 (GTSAM示例推荐2-3次)
-    max_window_frames: 400   # 周期性重置ISAM2 (0=不限制)
+    extra_iterations: 2      # 每次 solve 的 update 总次数；参数名为兼容旧配置保留
     relinearize_threshold: 0.001  # 更频繁重线性化 (ISAM2 默认 0.01)
 
     # 几何约束噪声 [tangential, radial, z, yaw]

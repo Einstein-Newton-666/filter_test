@@ -128,22 +128,21 @@ array<Vector3d,4> computeArmorCorners(position, orientation, width, height)
 ### gimbal_simulation 节点
 
 ```cpp
-// 两种追踪模式:
-// 1. 闭环: 订阅 /send_pack (目标角度), 发布 /recieve_pack + TF
-// 2. 真值追踪: 订阅 /armor_simulation/ground_truth, 直接计算 yaw/pitch
-//    use_ground_truth_tracking: true 时启用 (绕开 tracker→angle_solver 闭环)
-//    target_yaw = atan2(x, -y); target_pitch = -atan2(z, sqrt(x²+y²))
+// 闭环: 订阅 /send_pack (目标角度), 发布 /recieve_pack + TF
 // S-curve: s(t) = 3t²-2t³, 100ms 内完成
 // TF: odom→gimbal_link (RPY 0,pitch,yaw) + gimbal_link→camera_optical_frame (RPY -90°,0,0)
 ```
 
-### 配置新增
+### 云台真值追踪
 
 ```yaml
-/gimbal_simulation:
+/armor_simulation_node:
   ros__parameters:
-    use_ground_truth_tracking: true  # 真值追踪: 相机始终对准机器人
+    publish_gimbal_gt: true  # 仿真器直接发布 /send_pack，绕过 tracker→angle_solver 闭环
 ```
+
+`gimbal_simulation` 本身仍只订阅 `/send_pack`；真值 yaw/pitch 由
+`armor_simulation_node` 计算并发布。
 
 ### angle_solver 节点
 

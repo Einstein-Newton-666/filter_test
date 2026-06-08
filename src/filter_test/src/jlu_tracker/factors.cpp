@@ -1,6 +1,6 @@
 // Adapted from jlu_vision_26 auto_aim tracker factors
 #include "filter_test/jlu_tracker/factors.hpp"
-#include "filter_test/auto_graph_optimizer/utils/helpers.hpp"
+#include "filter_test/graph_optimizer/graph_math.hpp"
 
 #include <gtsam/base/Vector.h>
 #include <gtsam/base/types.h>
@@ -13,12 +13,16 @@
 
 namespace jlu {
 
-// ── Helpers ──
+// ═══════════════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════════════
 
+// 装甲板之间等距分布: index 0→0°, 1→90°, 2→180°, 3→270°
 inline double getArmorBetweenYawFromIndex(ArmorIndex index, int armor_numbers = 4) {
   return static_cast<int>(index) * (M_PI * 2.0 / armor_numbers);
 }
 
+// ZYX 欧拉角: R = Rz(yaw)*Ry(pitch)*Rx(roll), pitch=-R(2,0)
 inline Eigen::Vector3d rotationMatrixToRPY(const Eigen::Matrix3d& R) {
   double pitch = std::asin(std::max(-1.0, std::min(1.0, -R(2, 0))));
   double roll  = std::atan2(R(2, 1), R(2, 2));
@@ -35,7 +39,13 @@ static const std::vector<std::array<float, 3>> kSmallArmorPointsCV = {
     {0.0f,  0.0675f, -0.0625f},  // RightBottom
 };
 
-// ── TranslationFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// TranslationFactor — 3-key 位置预测 (CWNA 运动模型)
+//   X(k-1) + V(k-1)*dt → X(k)
+//   误差: X(k) - X(k-1) - V(k-1)*dt  (3D)
+//   噪声: σ=0.001m (位置预测精度 ~1mm, 提供强正则化)
+//   雅可比: H1=-I, H2=-dt*I, H3=I
+// ═══════════════════════════════════════════════════════════════════════
 TranslationFactor::TranslationFactor(const gtsam::SharedNoiseModel& model,
                                      gtsam::Key x_pre, gtsam::Key v_pre,
                                      gtsam::Key x_cur, double dt)
@@ -52,7 +62,13 @@ gtsam::Vector TranslationFactor::evaluateError(
   return error;
 }
 
-// ── YawFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// YawFactor — 3-key 朝向预测 (CWNA 角运动)
+//   R(k-1) * Rot2(W(k-1)*dt) → R(k)
+//   误差: (R(k-1) * Rot2(W*dt)).localCoordinates(R(k))  (1D, SO(2) 包裹)
+//   噪声: σ=0.005rad
+//   雅可比: H1=-1, H2=-dt, H3=1
+// ═══════════════════════════════════════════════════════════════════════
 YawFactor::YawFactor(const gtsam::SharedNoiseModel& model, gtsam::Key r_pre,
                      gtsam::Key w_pre, gtsam::Key r_cur, double dt)
     : Base(model, r_pre, w_pre, r_cur), dt_(dt) {}
@@ -71,7 +87,15 @@ gtsam::Vector YawFactor::evaluateError(const gtsam::Rot2& r_pre,
   return error;
 }
 
-// ── VelocityFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// VelocityFactor — 2-key 速度平滑 (防止速度欠约束)
+//   V(k-1) → V(k)
+//   误差: V(k) - V(k-1)  (3D)
+//   噪声: σ=0.01m/s (帧间速度变化 ~0.03m/s@3σ)
+//
+// 这是 jlu 收敛的关键: 观测只约束位置不约束速度,
+// VelocityFactor 提供独立的速度正则化链, 保证 ISAM2 信息矩阵满秩.
+// ═══════════════════════════════════════════════════════════════════════
 VelocityFactor::VelocityFactor(const gtsam::SharedNoiseModel& model,
                                gtsam::Key v_pre, gtsam::Key v_cur)
     : Base(model, v_pre, v_cur) {}
@@ -86,7 +110,12 @@ gtsam::Vector VelocityFactor::evaluateError(const gtsam::Vector3& v_pre,
   return error;
 }
 
-// ── VyawFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// VyawFactor — 2-key 角速度平滑
+//   W(k-1) → W(k)
+//   误差: W(k) - W(k-1)  (1D)
+//   噪声: σ=0.05rad/s
+// ═══════════════════════════════════════════════════════════════════════
 VyawFactor::VyawFactor(const gtsam::SharedNoiseModel& model,
                        gtsam::Key w_pre, gtsam::Key w_cur)
     : Base(model, w_pre, w_cur) {}
@@ -101,7 +130,15 @@ gtsam::Vector VyawFactor::evaluateError(const double& w_pre,
   return error;
 }
 
-// ── ArmorRadiusCenterZFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// ArmorRadiusCenterZFactor — 几何约束 (armors 0,2: r1 装甲板)
+//   4-key: armor_pose(Pose3) + radius(double) + center_yaw(Rot2) + center_pos(Point3)
+//   4D 误差: [切向, 径向, z, yaw_err]
+//
+// 坐标系: camera系 armor_pose → T_camera_to_odom → odom系
+// yaw 误差使用 Rot2::localCoordinates (SO(2) 流形包裹)
+// radius 通过 logistic 映射到 [radius_min, radius_max]
+// ═══════════════════════════════════════════════════════════════════════
 ArmorRadiusCenterZFactor::ArmorRadiusCenterZFactor(
     const gtsam::SharedNoiseModel& model, gtsam::Key armor_pose_key,
     gtsam::Key radius_key, gtsam::Key center_yaw_key,
@@ -173,7 +210,12 @@ gtsam::Vector ArmorRadiusCenterZFactor::evaluateError(
   return error;
 }
 
-// ── ArmorRadiusDZFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// ArmorRadiusDZFactor — 几何约束 (armors 1,3: r2+dz 装甲板)
+//   5-key: armor_pose + radius + dz + center_yaw + center_pos
+//   4D 误差: [切向, 径向, z, yaw_err]
+//   与 ArmorRadiusCenterZFactor 的区别: z 误差包含 dz 项
+// ═══════════════════════════════════════════════════════════════════════
 ArmorRadiusDZFactor::ArmorRadiusDZFactor(
     const gtsam::SharedNoiseModel& model, gtsam::Key armor_pose_key,
     gtsam::Key radius_key, gtsam::Key dz_key, gtsam::Key center_yaw_key,
@@ -252,7 +294,12 @@ gtsam::Vector ArmorRadiusDZFactor::evaluateError(
   return error;
 }
 
-// ── ArmorReprojFactor ──
+// ═══════════════════════════════════════════════════════════════════════
+// ArmorReprojFactor — 1-key 角点重投影 (第一级像素观测)
+//   误差: PinholeCamera::Project(armor_pose * corner_local) - pixel_observed  (2D)
+//   雅可比链: Cal3DS2 → PinholeCamera → Pose3.transformFrom
+//   每个装甲板 4 个此因子 (4角点 × 2D = 8 约束, 加上 Pose3 先验 6D = 14 约束 → 充分)
+// ═══════════════════════════════════════════════════════════════════════
 ArmorReprojFactor::ArmorReprojFactor(
     const gtsam::SharedNoiseModel& model, gtsam::Key armor_pose_key,
     const cv::Mat& camera_matrix, const cv::Mat& distortion_coefficients,

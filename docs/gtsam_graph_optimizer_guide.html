@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GTSAM 图优化结构与使用指南</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface-2: #1c2128;
+    --border: #30363d; --text: #c9d1d9; --muted: #8b949e;
+    --accent: #58a6ff; --green: #3fb950; --orange: #d2991d;
+    --red: #f85149; --purple: #a371f7; --teal: #39c5cf;
+    --code-bg: #1c2128;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.72;
+    max-width: 1080px; margin: 0 auto; padding: 40px 20px;
+  }
+  h1 { font-size: 2em; margin-bottom: .35em; color: #fff; line-height: 1.25; }
+  h2 {
+    font-size: 1.4em; margin: 2em 0 .65em; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border); color: #f0f6fc;
+  }
+  h3 { font-size: 1.1em; margin: 1.5em 0 .45em; color: var(--accent); }
+  p { margin: .62em 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: .88em; background: var(--code-bg); padding: 1px 5px;
+    border-radius: 4px; color: var(--orange);
+  }
+  pre {
+    background: var(--code-bg); padding: 16px; border-radius: 8px;
+    overflow-x: auto; margin: 12px 0; border: 1px solid var(--border);
+    font-size: .85em; line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  ul { margin: .5em 0 .5em 22px; }
+  li { margin: 4px 0; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 16px 0;
+    font-size: .9em;
+  }
+  th, td { padding: 10px 14px; text-align: left; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--surface); font-weight: 600; color: #f0f6fc; }
+  tr:nth-child(even) { background: #0d1117; }
+  tr:nth-child(odd) { background: var(--surface); }
+
+  .doc-nav {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 24px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface);
+  }
+  .doc-link {
+    display: inline-flex; align-items: center; min-height: 32px;
+    padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font-size: .9em;
+  }
+  .doc-link.active {
+    border-color: var(--accent); color: #79c0ff; background: #1a2a3a;
+  }
+
+  .note, .highlight, .warn, .danger {
+    padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0;
+  }
+  .note { background: #1a2332; border-left: 3px solid var(--accent); }
+  .highlight { background: #1a2a1a; border-left: 3px solid var(--green); }
+  .warn { background: #2a2210; border-left: 3px solid var(--orange); }
+  .danger { background: #2a1518; border-left: 3px solid var(--red); }
+
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px; margin: 16px 0;
+  }
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px;
+  }
+  .panel h3 { margin-top: 0; }
+
+  .flow {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 16px 0; font-size: .88em; flex-wrap: wrap;
+  }
+  .flow-box {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 8px 14px; border-radius: 6px; text-align: center;
+  }
+  .flow-box.blue { border-color: var(--accent); color: #79c0ff; background: #1a2a3a; }
+  .flow-box.green { border-color: var(--green); color: #7ee787; background: #1a2a1a; }
+  .flow-box.orange { border-color: var(--orange); color: #f0c060; background: #2a2210; }
+  .flow-box.purple { border-color: var(--purple); color: #d2a8ff; background: #251a35; }
+  .flow-arrow { color: var(--accent); font-weight: bold; font-size: 1.2em; }
+
+  .factor-graph {
+    display: flex; flex-direction: column; gap: 18px; margin: 18px 0;
+    font-family: 'JetBrains Mono', Consolas, monospace; font-size: .82em;
+  }
+  .layer { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+  .vnode, .snode, .fnode {
+    padding: 7px 12px; font-weight: 600; white-space: nowrap;
+  }
+  .vnode {
+    background: #1a3a5c; color: #79c0ff; border-radius: 20px;
+    border: 2px solid var(--accent);
+  }
+  .snode {
+    background: #1a3a1a; color: #7ee787; border-radius: 20px;
+    border: 2px solid var(--green);
+  }
+  .fnode {
+    background: #2a1a3c; color: #d2a8ff; border-radius: 5px;
+    border: 2px solid var(--purple); font-size: .86em;
+  }
+  .fnode.obs {
+    background: #1a2a2a; color: #7ee0e0; border-color: var(--teal);
+  }
+  .connector { color: var(--muted); font-size: 1.1em; }
+
+  .two-col {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px; margin: 16px 0;
+  }
+  .small { color: var(--muted); font-size: .9em; }
+  .kbd {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    border: 1px solid var(--border); border-bottom-width: 2px;
+    padding: 1px 5px; border-radius: 4px; background: var(--surface);
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 28px 14px; }
+    h1 { font-size: 1.65em; }
+    .two-col { grid-template-columns: 1fr; }
+    table { font-size: .84em; }
+    th, td { padding: 8px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>GTSAM 图优化结构与使用指南</h1>
+<p style="color:var(--muted)">
+  从最大后验估计、因子图和稀疏求解开始，讲到 <code>gtsam::ISAM2</code>、
+  <code>FixedLagSmoother</code>、自定义 factor，以及本项目
+  <code>ArmorCvPixelGraph</code> / <code>GraphModelRunner&lt;ArmorCvPixelProblem&gt;</code> 的实际接法。
+</p>
+
+<nav class="doc-nav">
+  <a class="doc-link" href="graph_optimizer_architecture.html">当前架构</a>
+  <a class="doc-link" href="factor_graph_optimization.html">因子图原理</a>
+  <a class="doc-link active" href="gtsam_graph_optimizer_guide.html">GTSAM 使用指南</a>
+</nav>
+
+<h2>1. 图优化到底在优化什么</h2>
+
+<p>
+  图优化是把一堆观测、运动模型、几何约束都写成残差，然后一起求一个最可能的状态。
+  在概率语言里，它是最大后验估计；在数值计算里，它就是加权非线性最小二乘。
+</p>
+
+<pre><code>x* = argmax p(x | z)
+   = argmin Σ ||e_i(x)||²_Σ_i
+      x     i
+
+e_i(x)       : 第 i 个因子的残差，通常是 predicted - measured
+Σ_i          : 该残差的协方差
+||e||²_Σ     : e^T Σ^-1 e，也就是按不确定性加权后的误差</code></pre>
+
+<div class="grid">
+  <div class="panel">
+    <h3>变量</h3>
+    <p>要估计的未知量，例如机器人中心 <code>center</code>、速度 <code>velocity</code>、中心 yaw、半径和高度差。</p>
+  </div>
+  <div class="panel">
+    <h3>因子</h3>
+    <p>一条约束，例如“这一帧位置应等于上一帧位置加速度积分”、“某个角点重投影应落在检测像素上”。</p>
+  </div>
+  <div class="panel">
+    <h3>噪声模型</h3>
+    <p>告诉优化器这条约束可信到什么程度。标准差越小，残差被惩罚越重。</p>
+  </div>
+</div>
+
+<div class="note">
+  <strong>工程直觉：</strong>EKF/UKF 每帧把状态压成一个均值和协方差；因子图保留最近多帧变量和约束结构。
+  这样当新观测进来时，优化器可以重新调整多帧状态、静态几何量和辅助 pose，而不是只修正当前状态。
+</div>
+
+<h2>2. 因子图的形状</h2>
+
+<p>
+  因子图是二分图：圆形变量节点只和方形因子节点相连。这个结构直接决定了雅可比矩阵的稀疏性。
+  GTSAM 的效率很大一部分来自它不把所有变量硬塞进一个大 dense 向量，而是按 key 和 factor
+  管理稀疏连接。
+</p>
+
+<div class="factor-graph">
+  <div class="layer">
+    <span class="vnode">center(k-1)</span>
+    <span class="connector">--</span>
+    <span class="fnode">TranslationFactor</span>
+    <span class="connector">--</span>
+    <span class="vnode">center(k)</span>
+    <span class="connector">--</span>
+    <span class="fnode obs">Geometry</span>
+    <span class="connector">--</span>
+    <span class="vnode">armor_pose(k,i)</span>
+  </div>
+  <div class="layer">
+    <span class="vnode">velocity(k-1)</span>
+    <span class="connector">--</span>
+    <span class="fnode">VelocityFactor</span>
+    <span class="connector">--</span>
+    <span class="vnode">velocity(k)</span>
+    <span class="connector"> </span>
+    <span class="snode">radius_a</span>
+    <span class="snode">radius_b</span>
+    <span class="snode">dz</span>
+  </div>
+  <div class="layer">
+    <span class="vnode">yaw(k-1)</span>
+    <span class="connector">--</span>
+    <span class="fnode">YawFactor</span>
+    <span class="connector">--</span>
+    <span class="vnode">yaw(k)</span>
+    <span class="connector">--</span>
+    <span class="fnode obs">Reprojection x4</span>
+    <span class="connector">--</span>
+    <span style="color:var(--muted)">pixels</span>
+  </div>
+</div>
+
+<table>
+<tr><th>节点类型</th><th>在 GTSAM 中的对应物</th><th>本项目例子</th></tr>
+<tr>
+  <td>变量节点</td>
+  <td><code>gtsam::Values</code> 中的一条 <code>Key -> value</code></td>
+  <td><code>x3</code> 对应第 3 帧中心 <code>gtsam::Point3</code>，<code>a0</code> 对应静态半径状态 <code>double</code></td>
+</tr>
+<tr>
+  <td>因子节点</td>
+  <td><code>gtsam::NonlinearFactor</code> / <code>NoiseModelFactorN</code></td>
+  <td><code>TranslationFactor</code>、<code>ArmorTypedReprojFactor</code>、<code>ArmorRadiusDZFactor</code></td>
+</tr>
+<tr>
+  <td>边</td>
+  <td>因子构造函数里传入的 key 列表</td>
+  <td><code>YawFactor(noise, yaw(k-1), vyaw(k-1), yaw(k), dt)</code></td>
+</tr>
+</table>
+
+<h2>3. GTSAM 的核心对象</h2>
+
+<p>理解 GTSAM 代码时，先把对象分成三类：变量容器、约束容器、求解器状态。</p>
+
+<table>
+<tr><th>对象</th><th>职责</th><th>使用要点</th></tr>
+<tr>
+  <td><code>gtsam::Key</code></td>
+  <td>变量的 64-bit id</td>
+  <td>只负责唯一标识，不携带类型。通常用 <code>gtsam::Symbol('x', k)</code> 生成便于调试的 key。</td>
+</tr>
+<tr>
+  <td><code>gtsam::Values</code></td>
+  <td>非线性变量表</td>
+  <td>插入和读取时必须类型一致，例如 <code>insert(key, gtsam::Point3)</code> 后用 <code>at&lt;gtsam::Point3&gt;</code> 取。</td>
+</tr>
+<tr>
+  <td><code>gtsam::NonlinearFactorGraph</code></td>
+  <td>非线性因子列表</td>
+  <td>可以 <code>addPrior</code>、<code>emplace_shared&lt;Factor&gt;</code>。它本身不求解，只保存约束。</td>
+</tr>
+<tr>
+  <td><code>gtsam::SharedNoiseModel</code></td>
+  <td>残差权重</td>
+  <td>常用 <code>Isotropic::Sigma</code>、<code>Diagonal::Sigmas</code>。残差维度必须和噪声维度一致。</td>
+</tr>
+<tr>
+  <td><code>gtsam::NoiseModelFactorN&lt;...&gt;</code></td>
+  <td>N 元自定义非线性因子基类</td>
+  <td>模板参数就是连接的变量 C++ 类型；<code>evaluateError</code> 返回 residual 并按需写雅可比。</td>
+</tr>
+<tr>
+  <td><code>gtsam::ISAM2</code></td>
+  <td>增量式非线性优化器</td>
+  <td>每次 <code>update(graph, values)</code> 加入新因子和新初值，再 <code>calculateEstimate()</code> 取结果。</td>
+</tr>
+<tr>
+  <td><code>gtsam::FixedLagSmoother</code></td>
+  <td>固定时间窗平滑</td>
+  <td>需要每个 key 的时间戳；窗口外变量会被边缘化。静态 key 必须特殊处理，避免过早被清掉。</td>
+</tr>
+</table>
+
+<div class="highlight">
+  <strong>本项目的关键封装：</strong><code>TypedKeyLayout</code> 给 <code>gtsam::Key</code> 补上了“变量名”和“C++ 类型”这两层工程约束，
+  防止手写 <code>Symbol</code> 和 <code>Values::at&lt;T&gt;</code> 时发生 prefix 冲突或类型取错。
+</div>
+
+<h2>4. 从非线性图到线性系统</h2>
+
+<p>GTSAM 每次求解时会在当前估计值附近线性化因子，得到稀疏线性最小二乘。</p>
+
+<pre><code>非线性因子:
+  e_i(x)
+
+在当前估计 x0 处线性化:
+  e_i(x0 + dx) ~= e_i(x0) + J_i dx
+
+堆叠所有因子:
+  minimize ||A dx - b||^2
+
+求出 dx 后:
+  x_new = retract(x0, dx)</code></pre>
+
+<div class="flow">
+  <div class="flow-box blue">NonlinearFactorGraph</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box">linearize(values)</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box green">Jacobian/Hessian</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box orange">eliminate</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box purple">Bayes tree</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box blue">delta + estimate</div>
+</div>
+
+<h3>4.1 为什么 iSAM2 快</h3>
+
+<p>
+  批量优化每帧重新线性化、重新消元整张图。<code>ISAM2</code> 会维护 Bayes tree，
+  当新因子进入时只重算受影响的 clique，并按阈值决定哪些变量需要重新线性化。
+</p>
+
+<div class="two-col">
+  <div class="panel">
+    <h3>Batch 优化</h3>
+    <pre><code>每帧:
+  graph += new_factors
+  values += new_initials
+  重新线性化整图
+  重新消元整图
+  得到 estimate</code></pre>
+  </div>
+  <div class="panel">
+    <h3>ISAM2 增量优化</h3>
+    <pre><code>每帧:
+  update(new_factors, new_initials)
+  找到受影响的 Bayes tree 分支
+  局部重新线性化和消元
+  calculateEstimate()</code></pre>
+  </div>
+</div>
+
+<div class="note">
+  <strong>本项目选择：</strong><code>smoother_lag &lt;= 0</code> 时使用普通 <code>gtsam::ISAM2</code>。
+  <code>smoother_lag &gt; 0</code> 时使用 <code>IncrementalFixedLagSmoother</code> 或
+  <code>BatchFixedLagSmoother</code>，由 <code>smoother_type</code> 参数选择。
+</div>
+
+<h2>5. 最小 GTSAM 使用流程</h2>
+
+<p>下面是一个最小化的 GTSAM 思路示例：声明 key、填初值、加先验和运动约束、调用优化器。</p>
+
+<pre><code class="language-cpp">#include &lt;gtsam/geometry/Point3.h&gt;
+#include &lt;gtsam/inference/Symbol.h&gt;
+#include &lt;gtsam/nonlinear/ISAM2.h&gt;
+#include &lt;gtsam/nonlinear/NonlinearFactorGraph.h&gt;
+#include &lt;gtsam/nonlinear/PriorFactor.h&gt;
+#include &lt;gtsam/nonlinear/Values.h&gt;
+#include &lt;gtsam/slam/BetweenFactor.h&gt;
+
+gtsam::NonlinearFactorGraph graph;
+gtsam::Values initial;
+
+auto x0 = gtsam::Symbol('x', 0);
+auto x1 = gtsam::Symbol('x', 1);
+
+auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
+    gtsam::Vector3(0.1, 0.1, 0.1));
+auto motion_noise = gtsam::noiseModel::Diagonal::Sigmas(
+    gtsam::Vector3(0.05, 0.05, 0.05));
+
+graph.addPrior(x0, gtsam::Point3(0.0, 0.0, 0.0), prior_noise);
+graph.emplace_shared&lt;gtsam::BetweenFactor&lt;gtsam::Point3&gt;&gt;(
+    x0, x1, gtsam::Point3(1.0, 0.0, 0.0), motion_noise);
+
+initial.insert(x0, gtsam::Point3(0.0, 0.0, 0.0));
+initial.insert(x1, gtsam::Point3(0.9, 0.1, 0.0));
+
+gtsam::ISAM2 isam;
+isam.update(graph, initial);
+gtsam::Values result = isam.calculateEstimate();
+auto x1_est = result.at&lt;gtsam::Point3&gt;(x1);</code></pre>
+
+<div class="warn">
+  <strong>注意：</strong>真实跟踪里不要把 <code>Values</code> 当普通 map 随便重复插入同一个 key。
+  同一轮 <code>update</code> 中同一个新 key 只能有一个初值；已经在优化器内部存在的旧 key 不应再次作为新初值提交。
+</div>
+
+<h2>6. 自定义 factor 怎么写</h2>
+
+<p>
+  GTSAM 自定义因子的核心是继承 <code>gtsam::NoiseModelFactorN&lt;T1, T2, ...&gt;</code>，
+  实现 <code>evaluateError</code>。模板参数决定这个因子连接哪些变量类型。
+</p>
+
+<pre><code class="language-cpp">class MyFactor
+    : public gtsam::NoiseModelFactorN&lt;gtsam::Point3, double&gt; {
+public:
+    using Base = gtsam::NoiseModelFactorN&lt;gtsam::Point3, double&gt;;
+
+    MyFactor(const gtsam::SharedNoiseModel&amp; noise,
+             gtsam::Key point_key, gtsam::Key scalar_key)
+        : Base(noise, point_key, scalar_key) {}
+
+    gtsam::Vector evaluateError(
+        const gtsam::Point3&amp; p,
+        const double&amp; s,
+        gtsam::OptionalMatrixType H1,
+        gtsam::OptionalMatrixType H2) const override {
+        if (H1) *H1 = (gtsam::Matrix(1, 3) &lt;&lt; 1.0, 0.0, 0.0).finished();
+        if (H2) *H2 = gtsam::Matrix::Constant(1, 1, -1.0);
+        return gtsam::Vector1(p.x() - s);
+    }
+};</code></pre>
+
+<table>
+<tr><th>检查项</th><th>要求</th><th>例子</th></tr>
+<tr>
+  <td>残差维度</td>
+  <td>返回向量维度必须等于噪声模型维度</td>
+  <td><code>ArmorTypedReprojFactor</code> 返回 2D 像素残差，因此用 <code>Vector2(pixel_sigma, pixel_sigma)</code></td>
+</tr>
+<tr>
+  <td>雅可比尺寸</td>
+  <td><code>H_i</code> 尺寸是 residual_dim x tangent_dim(variable_i)</td>
+  <td><code>Pose3</code> 的切空间是 6D，所以像素因子的 <code>H</code> 是 2x6</td>
+</tr>
+<tr>
+  <td>流形变量</td>
+  <td>不要直接把角度当普通差值处理跨 pi</td>
+  <td><code>YawFactor</code> 使用 <code>Rot2::localCoordinates</code> 计算 yaw 残差</td>
+</tr>
+<tr>
+  <td>可选雅可比</td>
+  <td>只有 <code>if (H)</code> 成立时才写矩阵</td>
+  <td>GTSAM 只在需要线性化时请求雅可比，误差评估时可能只要 residual</td>
+</tr>
+</table>
+
+<h3>6.1 本项目三个观测 factor</h3>
+
+<table>
+<tr><th>Factor</th><th>连接变量</th><th>残差</th><th>主要作用</th></tr>
+<tr>
+  <td><code>ArmorTypedReprojFactor</code></td>
+  <td><code>Pose3 armor_pose_camera</code></td>
+  <td>2D: projected_pixel - observed_pixel</td>
+  <td>每个角点一个因子，用 <code>Cal3DS2</code> 投影和畸变模型保留像素级信息。</td>
+</tr>
+<tr>
+  <td><code>ArmorRadiusCenterZFactor</code></td>
+  <td><code>Pose3</code>, <code>double radius_a_u</code>, <code>Rot2 yaw</code>, <code>Point3 center</code></td>
+  <td>4D: tangential, radial, z, yaw</td>
+  <td>偶数装甲板几何约束，连接独立 armor pose 和主状态。</td>
+</tr>
+<tr>
+  <td><code>ArmorRadiusDZFactor</code></td>
+  <td><code>Pose3</code>, <code>double radius_b_u</code>, <code>double dz</code>, <code>Rot2 yaw</code>, <code>Point3 center</code></td>
+  <td>4D: tangential, radial, z, yaw</td>
+  <td>奇数装甲板几何约束，比偶数装甲板多连接一个静态 <code>dz</code>。</td>
+</tr>
+</table>
+
+<h2>7. 本项目的 typed graph 封装</h2>
+
+<p>
+  当前工程没有让 ROS 节点直接操作 GTSAM。实际调用路径是：
+</p>
+
+<div class="flow">
+  <div class="flow-box blue">graph_optimizer_test.cpp</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box">ArmorGraphTracker</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box">ArmorCvPixelGraph</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box green">GraphModelRunner&lt;ArmorCvPixelProblem&gt;</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box orange">GraphOptimizer</div>
+  <div class="flow-arrow">-&gt;</div>
+  <div class="flow-box purple">GTSAM</div>
+</div>
+
+<h3>7.1 TypedKeyLayout: 变量契约</h3>
+
+<pre><code class="language-cpp">auto_graph::TypedKeyLayout result;
+result.addDynamic&lt;gtsam::Point3&gt;("center", 'x')
+      .addDynamic&lt;gtsam::Vector3&gt;("velocity", 'v')
+      .addDynamic&lt;gtsam::Rot2&gt;("yaw", 'r')
+      .addDynamic&lt;double&gt;("vyaw", 'w')
+      .addStatic&lt;double&gt;("radius_a", 'a')
+      .addStatic&lt;double&gt;("radius_b", 'b')
+      .addStatic&lt;double&gt;("dz", 'z');</code></pre>
+
+<table>
+<tr><th>变量名</th><th>prefix</th><th>GTSAM 类型</th><th>动态/静态</th><th>含义</th></tr>
+<tr><td><code>center</code></td><td><code>x</code></td><td><code>gtsam::Point3</code></td><td>动态</td><td>机器人中心位置</td></tr>
+<tr><td><code>velocity</code></td><td><code>v</code></td><td><code>gtsam::Vector3</code></td><td>动态</td><td>中心速度</td></tr>
+<tr><td><code>yaw</code></td><td><code>r</code></td><td><code>gtsam::Rot2</code></td><td>动态</td><td>中心 yaw，使用流形变量处理角度跨界</td></tr>
+<tr><td><code>vyaw</code></td><td><code>w</code></td><td><code>double</code></td><td>动态</td><td>中心角速度</td></tr>
+<tr><td><code>radius_a</code></td><td><code>a</code></td><td><code>double</code></td><td>静态</td><td>偶数装甲板半径的无界 logistic 状态</td></tr>
+<tr><td><code>radius_b</code></td><td><code>b</code></td><td><code>double</code></td><td>静态</td><td>奇数装甲板半径的无界 logistic 状态</td></tr>
+<tr><td><code>dz</code></td><td><code>z</code></td><td><code>double</code></td><td>静态</td><td>上下层装甲板高度差</td></tr>
+</table>
+
+<div class="note">
+  静态变量的 key 固定是 <code>prefix + 0</code>，例如 <code>a0</code>、<code>b0</code>、<code>z0</code>。
+  动态变量使用当前 frame id，例如 <code>x12</code>、<code>r12</code>。
+</div>
+
+<h3>7.2 每帧执行顺序</h3>
+
+<pre><code class="language-cpp">GraphModelRunner&lt;Model&gt;::update(input):
+  frame = optimizer.beginFrame(input.dt)
+  Model::addFrame(frame, input, variables)
+  solve_result = optimizer.solve()
+  return Model::makeOutput(output_context, input, variables)</code></pre>
+
+<table>
+<tr><th>阶段</th><th>当前实现</th><th>写入 GTSAM 的内容</th></tr>
+<tr>
+  <td><code>initialize</code></td>
+  <td>第一帧用第一块装甲板反推中心初值，并给 frame 0 主状态加 prior</td>
+  <td><code>Values</code> 插入 <code>x0/v0/r0/w0/a0/b0/z0</code>；<code>graph.addPrior</code> 加初始先验</td>
+</tr>
+<tr>
+  <td><code>addMotion</code></td>
+  <td>根据 runtime state 显式预测本帧初值</td>
+  <td>插入 <code>center/velocity/yaw/vyaw</code> 当前帧初值，添加 4 类运动因子</td>
+</tr>
+<tr>
+  <td><code>addObservation</code></td>
+  <td>匹配观测装甲板，生成每块装甲板的辅助 <code>Pose3</code> key</td>
+  <td>添加 pose prior、4 个角点重投影因子、1 个几何因子</td>
+</tr>
+<tr>
+  <td><code>solve</code></td>
+  <td>冷启动阶段只累计；冷启动后提交到 iSAM2 或 fixed-lag smoother</td>
+  <td><code>update(graph_, initial_values_)</code>，然后清空本轮增量</td>
+</tr>
+<tr>
+  <td><code>makeOutput</code></td>
+  <td>优化成功后从 <code>optimizer.estimate&lt;T&gt;</code> 取最新值</td>
+  <td>更新 runtime state，输出 predicted armors 和匹配结果</td>
+</tr>
+</table>
+
+<h3>7.3 项目风格伪代码</h3>
+
+<pre><code class="language-cpp">void ArmorCvPixelProblem::addFrame(FrameContext&amp; graph,
+                                   const FrameInput&amp; input,
+                                   const Variables&amp; vars) {
+    graph.insert(vars.center, predicted_center);
+    graph.insert(vars.velocity, predicted_velocity);
+    graph.insert(vars.yaw, gtsam::Rot2::fromAngle(predicted_yaw));
+    graph.insert(vars.vyaw, predicted_vyaw);
+
+    const uint64_t k = graph.frameId();
+    graph.addFactor&lt;TranslationFactor&gt;(
+        translation_noise,
+        graph.key(vars.center, k - 1), graph.key(vars.velocity, k - 1),
+        graph.key(vars.center, k), input.dt);
+
+    auto akey = armorPoseKey(graph.frameId(), armor_index);
+    graph.insertKey&lt;gtsam::Pose3&gt;(akey, armor_pose_camera);
+
+    graph.addFactor&lt;ArmorTypedReprojFactor&gt;(
+        pixel_noise, akey, corner_local, K, distortion, observed_pixel);
+
+    graph.addFactor&lt;ArmorRadiusCenterZFactor&gt;(
+        geo_noise, akey, graph.key("radius_a", 0),
+        graph.key("yaw"), graph.key("center"), T_camera_to_odom, armor_index);
+}</code></pre>
+
+<h2>8. 求解器后端和 fixed-lag 细节</h2>
+
+<p><code>GraphOptimizer::ensureSmoother()</code> 懒创建后端，三种路径互斥：</p>
+
+<table>
+<tr><th>配置</th><th>后端</th><th>适用场景</th><th>注意点</th></tr>
+<tr>
+  <td><code>smoother_lag &lt;= 0</code></td>
+  <td><code>gtsam::ISAM2</code></td>
+  <td>保留完整历史图，由 iSAM2 维护增量 Bayes tree</td>
+  <td>长时间运行时历史图会持续增长，但静态变量处理最简单。</td>
+</tr>
+<tr>
+  <td><code>smoother_lag &gt; 0</code><br><code>smoother_type=incremental</code></td>
+  <td><code>gtsam::IncrementalFixedLagSmoother</code></td>
+  <td>实时窗口平滑</td>
+  <td>必须给每个新 key 提供 timestamp；本项目还会刷新静态 key timestamp。</td>
+</tr>
+<tr>
+  <td><code>smoother_lag &gt; 0</code><br><code>smoother_type=batch</code></td>
+  <td><code>gtsam::BatchFixedLagSmoother</code></td>
+  <td>窗口内批量 LM 优化，便于对照调试</td>
+  <td>每帧窗口内重算，实时性通常弱于 incremental。</td>
+</tr>
+</table>
+
+<div class="warn">
+  <strong>fixed-lag 静态变量坑：</strong><code>radius_a</code>、<code>radius_b</code>、<code>dz</code>
+  是 frame 0 静态 key。如果 fixed-lag smoother 只给动态 key 更新时间戳，这些静态 key
+  会被认为太旧而被边缘化。本项目在 <code>solve()</code> 里显式刷新 <code>typed_layout_.staticKeys()</code>
+  的 timestamp 到当前帧。
+</div>
+
+<h2>9. 调参与排错清单</h2>
+
+<table>
+<tr><th>现象</th><th>常见原因</th><th>排查方向</th></tr>
+<tr>
+  <td><code>IndeterminantLinearSystemException</code> 或奇异矩阵</td>
+  <td>变量不可观、缺少 prior、某些 key 没有足够约束、factor 连接错 key</td>
+  <td>检查每个新变量是否有初值和约束；辅助 <code>Pose3</code> 是否至少有 prior、像素因子和几何因子。</td>
+</tr>
+<tr>
+  <td>估计抖动很大</td>
+  <td>观测噪声太小、运动噪声太大、匹配 index 抖动</td>
+  <td>增大 <code>pixel_noise_std</code> 或几何噪声；检查 <code>match_max_cost</code> 和上一帧 index 滞回。</td>
+</tr>
+<tr>
+  <td>响应太慢</td>
+  <td>运动噪声太小或 prior 太强，导致图不愿意跟随新观测</td>
+  <td>适当增大 <code>s2qxy/s2qz/s2qyaw</code> 或速度随机游走噪声。</td>
+</tr>
+<tr>
+  <td>yaw 在 pi 附近跳变</td>
+  <td>直接做标量角度差，没有用流形 residual</td>
+  <td>保持 <code>yaw</code> 为 <code>gtsam::Rot2</code>，factor 里用 <code>localCoordinates</code>。</td>
+</tr>
+<tr>
+  <td>半径跑到不合理范围</td>
+  <td>直接优化物理半径或 prior/几何噪声比例不合适</td>
+  <td>本项目使用 logistic 无界状态并映射到 <code>[0.10, 0.60]</code>；调 <code>prior_noise.radius</code> 和几何 radial 噪声。</td>
+</tr>
+<tr>
+  <td>fixed-lag 模式一段时间后丢变量</td>
+  <td>key timestamp 不完整，静态 key 被窗口边缘化</td>
+  <td>确认 <code>initial_values_</code> 里的新 key 和 <code>staticKeys()</code> 都写入 <code>KeyTimestampMap</code>。</td>
+</tr>
+<tr>
+  <td>离群角点拖偏 pose</td>
+  <td>像素 residual 没有鲁棒核，错误角点权重过高</td>
+  <td>真实检测器接入后可给 <code>ArmorTypedReprojFactor</code> 的 noise 包一层 Huber/robust model。</td>
+</tr>
+</table>
+
+<h2>10. 读代码时的路线</h2>
+
+<p>建议按调用方向读，不要从某个 factor 的雅可比开始硬啃。</p>
+
+<ol style="margin-left:22px">
+  <li><code>graph_optimizer_test.cpp</code>：看 ROS 参数如何进入 <code>TrackerConfig</code>，以及 TF 和 topic 边界。</li>
+  <li><code>armor_tracker.hpp/cpp</code>：看空帧、初始化、reset、<code>ArmorCvPixelGraph</code> 调用和输出封装。</li>
+  <li><code>graph_core.hpp/cpp</code>：看 <code>ModelSpec</code>、<code>FrameContext</code>、<code>GraphModelRunner</code>、<code>GraphOptimizer::solve()</code>。</li>
+  <li><code>armor_model.hpp/cpp</code>：看 <code>ArmorCvPixelProblem</code> 如何实现 describe、初始化、单帧因子和输出。</li>
+  <li>最后看三个自定义观测 factor 的 <code>evaluateError</code> 和雅可比。</li>
+</ol>
+
+<div class="highlight">
+  <strong>一句话总结：</strong>GTSAM 提供 key/value/factor/optimizer 的通用机制；
+  本项目用 <code>ModelSpec</code>、<code>FrameContext</code>、<code>GraphModelRunner</code> 和 <code>ArmorCvPixelGraph</code> 把这些机制包装成可复用的跟踪框架；
+  <code>ArmorCvPixelProblem</code> 则把装甲板几何、像素重投影和运动模型落成具体因子图。
+</div>
+
+</body>
+</html>
