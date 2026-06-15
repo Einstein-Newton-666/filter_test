@@ -503,6 +503,13 @@ ObservationNoise observationNoiseForArmor(
         distance,
         config.observation_noise_reference_distance,
         config.pose_prior_distance_scale);
+    noise.edge_reproj_sigma = is_outpost
+        ? config.edge_reproj_sigma
+        : scaledByDistance(
+              config.edge_reproj_sigma,
+              distance,
+              config.observation_noise_reference_distance,
+              config.edge_reproj_distance_scale);
     noise.geo_noise = is_outpost ? config.outpost_geo_noise : config.geo_noise;
     noise.geo_noise.tangential = scaledByDistance(
         noise.geo_noise.tangential,
@@ -526,7 +533,6 @@ MotionNoiseSigmas motionNoiseSigmasForConfig(
     const TrackerConfig& config,
     bool outpost_motion,
     double dt) {
-    (void)dt;
     const double s2qxy = outpost_motion ? config.outpost_s2qxy : config.s2qxy;
     const double s2qz = outpost_motion ? config.outpost_s2qz : config.s2qz;
     const double s2qyaw = outpost_motion ? config.outpost_s2qyaw : config.s2qyaw;
@@ -534,14 +540,15 @@ MotionNoiseSigmas motionNoiseSigmasForConfig(
         outpost_motion ? config.outpost_vel_sigma : config.vel_sigma;
     const double vyaw_sigma =
         outpost_motion ? config.outpost_vyaw_sigma : config.vyaw_sigma;
+    const double dt_scale = std::sqrt(std::max(dt, 1e-6));
 
     MotionNoiseSigmas sigmas;
-    sigmas.center_xy = sigmaFromVariance(s2qxy);
-    sigmas.center_z = sigmaFromVariance(s2qz);
-    sigmas.yaw = sigmaFromVariance(s2qyaw);
-    sigmas.velocity_xy = std::max(1e-6, velocity_sigma);
-    sigmas.velocity_z = std::max(1e-6, velocity_sigma);
-    sigmas.vyaw = std::max(1e-6, vyaw_sigma);
+    sigmas.center_xy = std::max(1e-6, sigmaFromVariance(s2qxy) * dt_scale);
+    sigmas.center_z = std::max(1e-6, sigmaFromVariance(s2qz) * dt_scale);
+    sigmas.yaw = std::max(1e-6, sigmaFromVariance(s2qyaw) * dt_scale);
+    sigmas.velocity_xy = std::max(1e-6, velocity_sigma * dt_scale);
+    sigmas.velocity_z = std::max(1e-6, velocity_sigma * dt_scale);
+    sigmas.vyaw = std::max(1e-6, vyaw_sigma * dt_scale);
     return sigmas;
 }
 
@@ -1418,7 +1425,8 @@ ArmorCvPixelGraph::ArmorCvPixelGraph(TrackerConfig config)
 
 void ArmorCvPixelGraph::initialize(
     const auto_aim_interfaces::msg::Armors& armors_msg,
-    const TrackerState* outpost_reinit_hint) {
+    const TrackerState* outpost_reinit_hint,
+    const TrackerState* frontend_state) {
     optimizer_.beginInit();
 
     // 前哨站首帧使用最中心观测作为内部 slot0，避免消息顺序变化或 reset 后
@@ -1426,8 +1434,23 @@ void ArmorCvPixelGraph::initialize(
     // 普通模型仍使用首块装甲板反推中心初值，后续由图优化逐步收敛半径/dz。
     // runtime_ 是跨帧缓存，这里必须写入初始状态，否则 update() 阶段无法用
     // 上一帧状态生成本帧预测初值。
-    const auto state = initialStateFromFirstArmor(
+    auto state = initialStateFromFirstArmor(
         armors_msg, config_, outpost_reinit_hint);
+    if (frontend_state != nullptr) {
+        // filter_graph_optimizer 模式下，首帧直接使用滤波器已经收敛的状态作为
+        // 图初值；armor_count 仍以同步到的观测类型为准，避免前端消息缺少类型字段。
+        state = *frontend_state;
+        const bool outpost = std::any_of(
+            armors_msg.armors.begin(), armors_msg.armors.end(),
+            [](const auto_aim_interfaces::msg::Armor& armor) {
+                return armor.number == "outpost";
+            });
+        state.armor_count = outpost ? 3 : 4;
+        if (outpost) {
+            state.outpost_base_xy = state.center.head<2>();
+            state.outpost_base_z = state.center.z();
+        }
+    }
     runtime_.state = state;
     runtime_.last_armor_index = 0;
     runtime_.matched_indices.clear();
@@ -1491,11 +1514,18 @@ void ArmorCvPixelGraph::initialize(
 ArmorCvPixelOutput ArmorCvPixelGraph::update(
     const auto_aim_interfaces::msg::Armors& armors_msg,
     double dt,
-    const Eigen::Isometry3d& T_camera_to_odom) {
+    const Eigen::Isometry3d& T_camera_to_odom,
+    const TrackerState* frontend_state) {
     // 每个增量帧先加入运动约束，再加入观测约束。运动约束负责把 k-1 与 k
     // 串起来；观测约束负责把本帧检测到的装甲板 Pose3 拉回中心/yaw/半径状态。
     optimizer_.beginFrame();
     addMotionFactors(dt);
+    if (frontend_state != nullptr) {
+        // 先写运动模型因子，再覆盖当前帧初值：这样图里仍保留 k-1 -> k 的
+        // 平滑约束，但本帧线性化起点靠近滤波器前端输出。
+        applyFrontendStateInitialValue(*frontend_state);
+        addFrontendPriorFactors(*frontend_state);
+    }
     addObservationFactors(armors_msg, T_camera_to_odom);
     return makeOutput(optimizer_.solve());
 }
@@ -1518,7 +1548,7 @@ void ArmorCvPixelGraph::addMotionFactors(double dt) {
     optimizer_.insert(vars_.vyaw, state.vyaw);
 
     // 运动模型拆成位置积分、速度随机游走、yaw 积分、vyaw 随机游走四类因子。
-    // 当前这些 sigma 是拆分因子图的每帧残差尺度；完整 CV Q(dt) 需要联合因子表达。
+    // 配置中的运动噪声按每秒尺度理解，这里按 sqrt(dt) 转成当前帧残差尺度。
     const MotionNoiseSigmas motion_noise =
         motionNoiseSigmasForConfig(config_, outpost_motion, dt);
     const auto translation_noise = gtsam::noiseModel::Diagonal::Sigmas(
@@ -1548,6 +1578,98 @@ void ArmorCvPixelGraph::addMotionFactors(double dt) {
     optimizer_.addFactor<VyawFactor>(
         gtsam::noiseModel::Isotropic::Sigma(1, motion_noise.vyaw),
         optimizer_.keyPrev(vars_.vyaw), optimizer_.key(vars_.vyaw));
+}
+
+void ArmorCvPixelGraph::applyFrontendStateInitialValue(
+    const TrackerState& frontend_state) {
+    // 这里改的是本帧 Values 初值，不是最终 estimate。真正是否贴近前端，
+    // 由运动因子、观测因子和 addFrontendPriorFactors() 的权重共同决定。
+    runtime_.state.center = frontend_state.center;
+    runtime_.state.velocity = frontend_state.velocity;
+    runtime_.state.yaw = frontend_state.yaw;
+    runtime_.state.vyaw = frontend_state.vyaw;
+    runtime_.state.armor_count = frontend_state.armor_count;
+    runtime_.state.radius_1 = frontend_state.radius_1;
+    runtime_.state.radius_2 = frontend_state.radius_2;
+    runtime_.state.dz = frontend_state.dz;
+    runtime_.state.outpost_dz_2 = frontend_state.outpost_dz_2;
+    if (frontend_state.armor_count == 3) {
+        runtime_.state.outpost_base_xy = frontend_state.center.head<2>();
+        runtime_.state.outpost_base_z = frontend_state.center.z();
+    }
+
+    optimizer_.upsert(vars_.center, auto_graph::eigenToPoint3(runtime_.state.center));
+    optimizer_.upsert(vars_.velocity, runtime_.state.velocity);
+    optimizer_.upsert(vars_.yaw, gtsam::Rot2::fromAngle(runtime_.state.yaw));
+    optimizer_.upsert(vars_.vyaw, runtime_.state.vyaw);
+}
+
+void ArmorCvPixelGraph::addFrontendPriorFactors(
+    const TrackerState& frontend_state) {
+    if (!config_.frontend_prior.enabled) return;
+
+    // 前哨站输出中心语义来自静态 base，因此 prior 约束 base；普通模型则直接
+    // 约束当前帧动态 center。velocity/yaw/vyaw 在两种模型中仍是动态变量。
+    const bool outpost = frontend_state.armor_count == 3;
+    if (outpost) {
+        optimizer_.addPrior(
+            vars_.outpost_base_xy,
+            gtsam::Point2(frontend_state.center.x(), frontend_state.center.y()),
+            gtsam::noiseModel::Isotropic::Sigma(
+                2, config_.frontend_prior.outpost_base_sigma));
+        optimizer_.addPrior(
+            vars_.outpost_base_z,
+            frontend_state.center.z(),
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.outpost_base_sigma));
+    } else {
+        optimizer_.addPrior(
+            vars_.center, auto_graph::eigenToPoint3(frontend_state.center),
+            gtsam::noiseModel::Isotropic::Sigma(
+                3, config_.frontend_prior.center_sigma));
+    }
+    optimizer_.addPrior(
+        vars_.velocity, frontend_state.velocity,
+        gtsam::noiseModel::Isotropic::Sigma(
+            3, config_.frontend_prior.velocity_sigma));
+    optimizer_.addPrior(
+        vars_.yaw, gtsam::Rot2::fromAngle(frontend_state.yaw),
+        gtsam::noiseModel::Isotropic::Sigma(
+            1, config_.frontend_prior.yaw_sigma));
+    optimizer_.addPrior(
+        vars_.vyaw, frontend_state.vyaw,
+        gtsam::noiseModel::Isotropic::Sigma(
+            1, config_.frontend_prior.vyaw_sigma));
+
+    if (!config_.frontend_prior.geometry_enabled) return;
+
+    if (outpost) {
+        optimizer_.addPrior(
+            vars_.outpost_radius, radiusToState(frontend_state.radius_1),
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.radius_sigma));
+        optimizer_.addPrior(
+            vars_.outpost_dz_1, frontend_state.dz,
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.dz_sigma));
+        optimizer_.addPrior(
+            vars_.outpost_dz_2, frontend_state.outpost_dz_2,
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.dz_sigma));
+    } else {
+        optimizer_.addPrior(
+            vars_.radius_a, radiusToState(frontend_state.radius_1),
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.radius_sigma));
+        optimizer_.addPrior(
+            vars_.radius_b, radiusToState(frontend_state.radius_2),
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.radius_sigma));
+        optimizer_.addPrior(
+            vars_.dz, frontend_state.dz,
+            gtsam::noiseModel::Isotropic::Sigma(
+                1, config_.frontend_prior.dz_sigma));
+    }
 }
 
 void ArmorCvPixelGraph::addObservationFactors(
@@ -1610,9 +1732,11 @@ void ArmorCvPixelGraph::addObservationFactors(
                            obs_noise.geo_noise.radial,
                            obs_noise.geo_noise.height,
                            obs_noise.geo_noise.yaw));
+        const auto edge_noise =
+            gtsam::noiseModel::Isotropic::Sigma(4, obs_noise.edge_reproj_sigma);
         addArmorObservationFactors(
             armor, armor_index, T_camera_to_odom, pixel_noise,
-            pose_prior_noise, geo_noise);
+            pose_prior_noise, geo_noise, edge_noise);
     }
 }
 
@@ -1622,7 +1746,8 @@ void ArmorCvPixelGraph::addArmorObservationFactors(
     const Eigen::Isometry3d& T_camera_to_odom,
     const gtsam::SharedNoiseModel& pixel_noise,
     const gtsam::SharedNoiseModel& pose_prior_noise,
-    const gtsam::SharedNoiseModel& geo_noise) {
+    const gtsam::SharedNoiseModel& geo_noise,
+    const gtsam::SharedNoiseModel& edge_noise) {
     const auto& corners = kSmallArmorCornersLocal;
     // 这里采用两级观测：
     // 1. 每个装甲板观测先生成一个辅助 Pose3 key，表达相机坐标系下的装甲板位姿；
@@ -1657,8 +1782,6 @@ void ArmorCvPixelGraph::addArmorObservationFactors(
     const double armor_pitch = is_outpost
         ? config_.outpost_armor_pitch
         : config_.standard_armor_pitch;
-    const auto edge_noise =
-        gtsam::noiseModel::Isotropic::Sigma(4, config_.edge_reproj_sigma);
     auto add_yaw_edge_factor = [&]() {
         if (!config_.use_edge_reproj_factor || !has_full_corners) {
             return;

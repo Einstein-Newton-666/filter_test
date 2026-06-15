@@ -38,12 +38,16 @@ TrackerUpdateResult ArmorGraphTracker::update(const TrackerFrameInput& input) {
     // tracker 只负责输入门控和结果封装；图模型由 ArmorCvPixelGraph 执行。
     if (!graph_.initialized()) {
         // 第一帧只建立 frame 0 先验图。没有当前帧运动边，因此返回 accepted 但 solved=false。
-        initialize(input.armors_msg);
+        initialize(
+            input.armors_msg,
+            input.frontend_state ? &(*input.frontend_state) : nullptr);
         return makeResult(true, false, {});
     }
 
     auto output =
-        graph_.update(input.armors_msg, input.dt, input.T_camera_to_odom);
+        graph_.update(
+            input.armors_msg, input.dt, input.T_camera_to_odom,
+            input.frontend_state ? &(*input.frontend_state) : nullptr);
     // graph 输出已经包含冷启动、失败和优化成功三种情况的状态选择。
     const bool all_unmatched = !output.matched_indices.empty() &&
         std::none_of(output.matched_indices.begin(), output.matched_indices.end(),
@@ -93,14 +97,17 @@ uint64_t ArmorGraphTracker::frameId() const {
     return graph_.frameId();
 }
 
-void ArmorGraphTracker::initialize(const auto_aim_interfaces::msg::Armors& msg) {
+void ArmorGraphTracker::initialize(
+    const auto_aim_interfaces::msg::Armors& msg,
+    const TrackerState* frontend_state) {
     const bool outpost = std::any_of(
         msg.armors.begin(), msg.armors.end(),
         [](const auto_aim_interfaces::msg::Armor& armor) {
             return armor.number == "outpost";
         });
     graph_.initialize(
-        msg, outpost && has_last_outpost_state_ ? &last_outpost_state_ : nullptr);
+        msg, outpost && has_last_outpost_state_ ? &last_outpost_state_ : nullptr,
+        frontend_state);
 }
 
 void ArmorGraphTracker::reset() {

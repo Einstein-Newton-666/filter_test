@@ -14,6 +14,7 @@
 #include <gtsam/geometry/Rot2.h>
 
 #include "filter_test/graph_optimizer/armor_tracker.hpp"
+#include "filter_test/filter_frontend_adapter.hpp"
 #include "filter_test/graph_optimizer/rune_model.hpp"
 #include "filter_test/graph_optimizer_test.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
@@ -260,6 +261,8 @@ TEST(ArmorObservationNoiseTest, StandardNoiseScalesWithDistance) {
     config.observation_noise_reference_distance = 5.0;
     config.pose_prior_sigma = 0.1;
     config.pose_prior_distance_scale = 0.02;
+    config.edge_reproj_sigma = 0.04;
+    config.edge_reproj_distance_scale = 0.02;
     config.geo_noise.tangential = 0.02;
     config.geo_noise.radial = 0.03;
     config.geo_radial_distance_scale = 0.01;
@@ -282,8 +285,10 @@ TEST(ArmorObservationNoiseTest, StandardNoiseScalesWithDistance) {
         filter_test::graph_optimizer::observationNoiseForArmor(config, far_armor);
 
     EXPECT_NEAR(near_noise.pixel_sigma, 1.0, 1e-12);
+    EXPECT_NEAR(near_noise.edge_reproj_sigma, 0.04, 1e-12);
     EXPECT_GT(far_noise.pixel_sigma, near_noise.pixel_sigma);
     EXPECT_GT(far_noise.pose_prior_sigma, near_noise.pose_prior_sigma);
+    EXPECT_GT(far_noise.edge_reproj_sigma, near_noise.edge_reproj_sigma);
     EXPECT_GT(far_noise.geo_noise.tangential, near_noise.geo_noise.tangential);
     EXPECT_GT(far_noise.geo_noise.radial, near_noise.geo_noise.radial);
     EXPECT_GT(far_noise.geo_noise.yaw, near_noise.geo_noise.yaw);
@@ -299,6 +304,8 @@ TEST(ArmorObservationNoiseTest, OutpostUsesDedicatedObservationNoise) {
     config.geo_noise.yaw = 0.05;
     config.outpost_geo_noise.height = 0.005;
     config.outpost_geo_noise.yaw = 0.01;
+    config.edge_reproj_sigma = 0.04;
+    config.edge_reproj_distance_scale = 10.0;
 
     auto_aim_interfaces::msg::Armor armor;
     armor.number = "outpost";
@@ -310,8 +317,88 @@ TEST(ArmorObservationNoiseTest, OutpostUsesDedicatedObservationNoise) {
         filter_test::graph_optimizer::observationNoiseForArmor(config, armor);
 
     EXPECT_NEAR(noise.pixel_sigma, 2.0, 1e-12);
+    EXPECT_NEAR(noise.edge_reproj_sigma, 0.04, 1e-12);
     EXPECT_NEAR(noise.geo_noise.height, 0.005, 1e-12);
     EXPECT_NEAR(noise.geo_noise.yaw, 0.01, 1e-12);
+}
+
+TEST(FilterFrontendAdapterTest, MapsStandardResultToTrackerState) {
+    filter_test::msg::Result result;
+    result.position.x = 1.0;
+    result.position.y = 2.0;
+    result.position.z = 3.0;
+    result.velocity.x = 0.1;
+    result.velocity.y = 0.2;
+    result.velocity.z = 0.3;
+    result.yaw = 0.4;
+    result.v_yaw = 0.5;
+    result.radius_1 = 0.25;
+    result.radius_2 = 0.35;
+    result.dz = 0.08;
+    result.dz2 = -0.02;
+
+    auto_aim_interfaces::msg::Armors armors;
+    auto_aim_interfaces::msg::Armor armor;
+    armor.number = "3";
+    armors.armors.push_back(armor);
+
+    const auto state = filter_test::trackerStateFromFilterResult(result, armors);
+
+    EXPECT_EQ(state.armor_count, 4);
+    EXPECT_NEAR(state.center.x(), 1.0, 1e-12);
+    EXPECT_NEAR(state.center.y(), 2.0, 1e-12);
+    EXPECT_NEAR(state.center.z(), 3.0, 1e-12);
+    EXPECT_NEAR(state.velocity.x(), 0.1, 1e-12);
+    EXPECT_NEAR(state.velocity.y(), 0.2, 1e-12);
+    EXPECT_NEAR(state.velocity.z(), 0.3, 1e-12);
+    EXPECT_NEAR(state.yaw, 0.4, 1e-12);
+    EXPECT_NEAR(state.vyaw, 0.5, 1e-12);
+    EXPECT_NEAR(state.radius_1, 0.25, 1e-12);
+    EXPECT_NEAR(state.radius_2, 0.35, 1e-12);
+    EXPECT_NEAR(state.dz, 0.08, 1e-12);
+    EXPECT_NEAR(state.outpost_dz_2, 0.0, 1e-12);
+    EXPECT_TRUE(std::isnan(state.outpost_base_xy.x()));
+    EXPECT_TRUE(std::isnan(state.outpost_base_z));
+}
+
+TEST(FilterFrontendAdapterTest, MapsOutpostResultToTrackerState) {
+    filter_test::msg::Result result;
+    result.position.x = 1.0;
+    result.position.y = -2.0;
+    result.position.z = 1.5;
+    result.velocity.x = 0.01;
+    result.velocity.y = 0.02;
+    result.velocity.z = 0.03;
+    result.yaw = 1.2;
+    result.v_yaw = -0.6;
+    result.radius_1 = 0.2765;
+    result.radius_2 = 0.2765;
+    result.dz = 0.20;
+    result.dz2 = -0.10;
+
+    auto_aim_interfaces::msg::Armors armors;
+    auto_aim_interfaces::msg::Armor armor;
+    armor.number = "outpost";
+    armors.armors.push_back(armor);
+
+    const auto state = filter_test::trackerStateFromFilterResult(result, armors);
+
+    EXPECT_EQ(state.armor_count, 3);
+    EXPECT_NEAR(state.center.x(), 1.0, 1e-12);
+    EXPECT_NEAR(state.center.y(), -2.0, 1e-12);
+    EXPECT_NEAR(state.center.z(), 1.5, 1e-12);
+    EXPECT_NEAR(state.velocity.x(), 0.01, 1e-12);
+    EXPECT_NEAR(state.velocity.y(), 0.02, 1e-12);
+    EXPECT_NEAR(state.velocity.z(), 0.03, 1e-12);
+    EXPECT_NEAR(state.yaw, 1.2, 1e-12);
+    EXPECT_NEAR(state.vyaw, -0.6, 1e-12);
+    EXPECT_NEAR(state.radius_1, 0.2765, 1e-12);
+    EXPECT_NEAR(state.radius_2, 0.2765, 1e-12);
+    EXPECT_NEAR(state.dz, 0.20, 1e-12);
+    EXPECT_NEAR(state.outpost_dz_2, -0.10, 1e-12);
+    EXPECT_NEAR(state.outpost_base_xy.x(), 1.0, 1e-12);
+    EXPECT_NEAR(state.outpost_base_xy.y(), -2.0, 1e-12);
+    EXPECT_NEAR(state.outpost_base_z, 1.5, 1e-12);
 }
 
 TEST(RuneGraphFactorTest, ReprojectionResidualIsZeroForObservedProjection) {
@@ -1011,7 +1098,7 @@ TEST(TypedMotionFactorTest, VelocityFactorJacobiansHaveExpectedSigns) {
     EXPECT_TRUE(H2.isApprox(gtsam::Matrix3::Identity(), 1e-12));
 }
 
-TEST(TypedMotionFactorTest, MotionNoiseUsesConfiguredPerFrameSigmas) {
+TEST(TypedMotionFactorTest, MotionNoiseScalesConfiguredSigmasByDt) {
     filter_test::graph_optimizer::TrackerConfig config;
     config.s2qxy = 0.08;
     config.s2qz = 0.02;
@@ -1023,12 +1110,13 @@ TEST(TypedMotionFactorTest, MotionNoiseUsesConfiguredPerFrameSigmas) {
     const auto sigmas =
         filter_test::graph_optimizer::motionNoiseSigmasForConfig(config, false, dt);
 
-    EXPECT_NEAR(sigmas.center_xy, std::sqrt(config.s2qxy), 1e-12);
-    EXPECT_NEAR(sigmas.center_z, std::sqrt(config.s2qz), 1e-12);
-    EXPECT_NEAR(sigmas.yaw, std::sqrt(config.s2qyaw), 1e-12);
-    EXPECT_NEAR(sigmas.velocity_xy, config.vel_sigma, 1e-12);
-    EXPECT_NEAR(sigmas.velocity_z, config.vel_sigma, 1e-12);
-    EXPECT_NEAR(sigmas.vyaw, config.vyaw_sigma, 1e-12);
+    const double sqrt_dt = std::sqrt(dt);
+    EXPECT_NEAR(sigmas.center_xy, std::sqrt(config.s2qxy) * sqrt_dt, 1e-12);
+    EXPECT_NEAR(sigmas.center_z, std::sqrt(config.s2qz) * sqrt_dt, 1e-12);
+    EXPECT_NEAR(sigmas.yaw, std::sqrt(config.s2qyaw) * sqrt_dt, 1e-12);
+    EXPECT_NEAR(sigmas.velocity_xy, config.vel_sigma * sqrt_dt, 1e-12);
+    EXPECT_NEAR(sigmas.velocity_z, config.vel_sigma * sqrt_dt, 1e-12);
+    EXPECT_NEAR(sigmas.vyaw, config.vyaw_sigma * sqrt_dt, 1e-12);
 }
 
 TEST(TypedArmorFactorTest, RadiusCenterZFactorUsesRot2YawResidual) {
@@ -1895,6 +1983,178 @@ TEST(GraphOptimizerFacadeTest, ArmorCvPixelGraphInitializeSetsStateAndFrameId) {
     EXPECT_NEAR(graph.state().center.x(), 1.25, 1e-12);
     EXPECT_NEAR(graph.state().center.y(), 0.0, 1e-12);
     EXPECT_NEAR(graph.state().center.z(), 0.5, 1e-12);
+}
+
+TEST(GraphOptimizerFacadeTest, FrontendStateInitializesGraphState) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+
+    filter_test::graph_optimizer::TrackerState frontend;
+    frontend.center = Eigen::Vector3d(2.0, -1.0, 0.8);
+    frontend.velocity = Eigen::Vector3d(0.1, 0.2, 0.3);
+    frontend.yaw = 0.4;
+    frontend.vyaw = 0.5;
+    frontend.radius_1 = 0.26;
+    frontend.radius_2 = 0.31;
+    frontend.dz = 0.04;
+    frontend.armor_count = 4;
+
+    graph.initialize(observations, nullptr, &frontend);
+
+    EXPECT_TRUE(graph.initialized());
+    EXPECT_NEAR(graph.state().center.x(), 2.0, 1e-12);
+    EXPECT_NEAR(graph.state().center.y(), -1.0, 1e-12);
+    EXPECT_NEAR(graph.state().center.z(), 0.8, 1e-12);
+    EXPECT_NEAR(graph.state().velocity.x(), 0.1, 1e-12);
+    EXPECT_NEAR(graph.state().yaw, 0.4, 1e-12);
+    EXPECT_NEAR(graph.state().radius_1, 0.26, 1e-12);
+    EXPECT_NEAR(graph.state().radius_2, 0.31, 1e-12);
+    EXPECT_NEAR(graph.state().dz, 0.04, 1e-12);
+}
+
+TEST(GraphOptimizerFacadeTest, FrontendStateOverridesColdStartUpdateInitialValue) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 10;
+    config.frontend_prior.enabled = false;
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+    graph.initialize(observations);
+
+    filter_test::graph_optimizer::TrackerState frontend = graph.state();
+    frontend.center = Eigen::Vector3d(3.0, -2.0, 0.9);
+    frontend.velocity = Eigen::Vector3d(0.4, 0.5, 0.6);
+    frontend.yaw = 0.7;
+    frontend.vyaw = -0.2;
+    frontend.armor_count = 4;
+
+    auto output = graph.update(
+        observations, 0.01, Eigen::Isometry3d::Identity(), &frontend);
+
+    EXPECT_TRUE(output.solve_result.cold_start);
+    EXPECT_NEAR(output.state.center.x(), 3.0, 1e-12);
+    EXPECT_NEAR(output.state.center.y(), -2.0, 1e-12);
+    EXPECT_NEAR(output.state.center.z(), 0.9, 1e-12);
+    EXPECT_NEAR(output.state.velocity.x(), 0.4, 1e-12);
+    EXPECT_NEAR(output.state.yaw, 0.7, 1e-12);
+    EXPECT_NEAR(output.state.vyaw, -0.2, 1e-12);
+}
+
+TEST(GraphOptimizerFacadeTest, FrontendWeakPriorPullsSolvedDynamicState) {
+    filter_test::graph_optimizer::TrackerConfig config;
+    config.optimizer.cold_start_frames = 0;
+    config.optimizer.update_iterations = 4;
+    config.pixel_sigma = 1e9;
+    config.pose_prior_sigma = 1e9;
+    config.geo_noise.tangential = 1e9;
+    config.geo_noise.radial = 1e9;
+    config.geo_noise.height = 1e9;
+    config.geo_noise.yaw = 1e9;
+    config.use_edge_reproj_factor = false;
+    config.frontend_prior.enabled = true;
+    config.frontend_prior.geometry_enabled = false;
+    config.frontend_prior.center_sigma = 0.001;
+    config.frontend_prior.velocity_sigma = 0.001;
+    config.frontend_prior.yaw_sigma = 0.001;
+    config.frontend_prior.vyaw_sigma = 0.001;
+    filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+
+    auto_aim_interfaces::msg::Armors observations;
+    auto_aim_interfaces::msg::Armor obs;
+    obs.pose.position.x = 1.0;
+    obs.pose.position.y = 0.0;
+    obs.pose.position.z = 0.5;
+    obs.pose.orientation.w = 1.0;
+    obs.yaw = 0.0;
+    observations.armors.push_back(obs);
+    graph.initialize(observations);
+
+    filter_test::graph_optimizer::TrackerState frontend = graph.state();
+    frontend.center = Eigen::Vector3d(2.0, 0.4, 0.7);
+    frontend.velocity = Eigen::Vector3d(0.2, -0.1, 0.05);
+    frontend.yaw = 0.3;
+    frontend.vyaw = -0.4;
+    frontend.armor_count = 4;
+
+    auto output = graph.update(
+        observations, 0.01, Eigen::Isometry3d::Identity(), &frontend);
+
+    ASSERT_TRUE(output.solve_result.optimized);
+    EXPECT_NEAR(output.state.center.x(), frontend.center.x(), 1e-3);
+    EXPECT_NEAR(output.state.center.y(), frontend.center.y(), 1e-3);
+    EXPECT_NEAR(output.state.center.z(), frontend.center.z(), 1e-3);
+    EXPECT_NEAR(output.state.velocity.x(), frontend.velocity.x(), 1e-3);
+    EXPECT_NEAR(output.state.yaw, frontend.yaw, 1e-3);
+    EXPECT_NEAR(output.state.vyaw, frontend.vyaw, 1e-3);
+}
+
+TEST(GraphOptimizerFacadeTest, FrontendGeometryPriorIsOptional) {
+    auto run_once = [](bool geometry_enabled) {
+        filter_test::graph_optimizer::TrackerConfig config;
+        config.optimizer.cold_start_frames = 0;
+        config.optimizer.update_iterations = 4;
+        config.pixel_sigma = 1e9;
+        config.pose_prior_sigma = 1e9;
+        config.geo_noise.tangential = 1e9;
+        config.geo_noise.radial = 1e9;
+        config.geo_noise.height = 1e9;
+        config.geo_noise.yaw = 1e9;
+        config.use_edge_reproj_factor = false;
+        config.frontend_prior.enabled = true;
+        config.frontend_prior.geometry_enabled = geometry_enabled;
+        config.frontend_prior.center_sigma = 0.001;
+        config.frontend_prior.velocity_sigma = 0.001;
+        config.frontend_prior.yaw_sigma = 0.001;
+        config.frontend_prior.vyaw_sigma = 0.001;
+        config.frontend_prior.radius_sigma = 0.001;
+        config.frontend_prior.dz_sigma = 0.001;
+        filter_test::graph_optimizer::ArmorCvPixelGraph graph(config);
+
+        auto_aim_interfaces::msg::Armors observations;
+        auto_aim_interfaces::msg::Armor obs;
+        obs.pose.position.x = 1.0;
+        obs.pose.position.y = 0.0;
+        obs.pose.position.z = 0.5;
+        obs.pose.orientation.w = 1.0;
+        obs.yaw = 0.0;
+        observations.armors.push_back(obs);
+        graph.initialize(observations);
+
+        filter_test::graph_optimizer::TrackerState frontend = graph.state();
+        frontend.radius_1 = 0.36;
+        frontend.radius_2 = 0.37;
+        frontend.dz = 0.09;
+        frontend.armor_count = 4;
+
+        return graph.update(
+            observations, 0.01, Eigen::Isometry3d::Identity(), &frontend).state;
+    };
+
+    const auto without_geometry = run_once(false);
+    const auto with_geometry = run_once(true);
+
+    EXPECT_NEAR(without_geometry.radius_1, 0.25, 1e-3);
+    EXPECT_NEAR(without_geometry.radius_2, 0.25, 1e-3);
+    EXPECT_NEAR(without_geometry.dz, 0.0, 1e-3);
+    EXPECT_NEAR(with_geometry.radius_1, 0.36, 1e-3);
+    EXPECT_NEAR(with_geometry.radius_2, 0.37, 1e-3);
+    EXPECT_NEAR(with_geometry.dz, 0.09, 1e-3);
 }
 
 TEST(GraphOptimizerFacadeTest, ArmorCvPixelGraphInitializesOutpostState) {

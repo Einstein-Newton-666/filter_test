@@ -2,6 +2,14 @@
   ros__parameters:
     # 通配参数会应用到本文件里的所有 filter_test 节点。
     # 节点块仍可单独覆盖这里的默认值；CameraInfo 是图优化和 jlu_tracker 的统一内参来源。
+    # 调参约定:
+    # - 名字含 s2q/r_* 的滤波器参数通常是方差；名字含 *_sigma/*_std 的图优化参数是标准差。
+    # - 标准差越小，该因子/先验越硬，输出更平滑但更容易滞后或被错误模型锁死。
+    # - 标准差越大，该因子/先验越软，输出更跟随观测但更容易受噪声抖动。
+    # - 距离缩放参数只在超过 observation_noise_reference_distance 后放宽观测约束。
+    # 默认 tracker 后端。命令行 tracker_backend:=... 仍然优先于这里的值。
+    # graph=纯图优化；filter_graph=启动传统滤波器前端 + 图优化后端。
+    tracker_backend: "graph"
     camera_name: "narrow_stereo"
     camera_info_url: "package://armor_simulation/config/camera_info.yaml"
 
@@ -15,6 +23,8 @@
       # CV 模型过程噪声对角项，状态为:
       # [xc, vxc, yc, vyc, za, vza, yaw, vyaw, r1_u, r2_u, dz]
       # 数值越大，滤波器越相信目标可快速机动或几何量可变化。
+      # 远距离 yaw 抖动大时，通常先减小 s2qyaw_* 或增大 r_yaw_det；
+      # 若切换装甲板后收敛太慢，再适当放大过程噪声。
       s2qxy_cv: 0.08         # x/y 中心位置-速度白噪声强度
       s2qz_cv: 0.02          # z 高度通常慢变，弱于平面机动
       s2qyaw_cv: 0.18        # 普通车 yaw 可机动，但不应完全跟随单帧 PnP
@@ -31,6 +41,7 @@
 
       # Detector 模式观测 R 对角项。观测量为 yaw、pitch、distance、armor yaw；
       # distance 项在代码中还会按距离和装甲板朝向放大。
+      # R 越大越不信任单帧 PnP，滤波结果更平滑；R 越小越贴近观测，响应更快但噪声更明显。
       r_pose_det: 0.0002     # yaw/pitch 角度观测方差，std≈0.014rad
       r_distance_det: 0.0016 # distance 方差基准，5m 时 std≈0.2m
       r_yaw_det: 0.02        # 装甲板朝向 yaw 方差，std≈0.14rad
@@ -75,6 +86,8 @@
     verbose: false         # 是否打印 [GO] 调试输出
 
     # 公共匹配质量门控，普通四装甲板和前哨站都会使用。
+    # cost 同时含 yaw 差和位置差；若匹配本身确认正确但偶发 reset，可略放大阈值；
+    # 若出现跨槽位/跨装甲板误匹配，应优先收紧阈值或检查预测中心/yaw。
     match_max_cost: 2.2    # 普通/前哨站均为 yaw_diff + 3*pos_err，超过则拒绝观测
     match_quality:
       window_size: 10                       # 类 autoaim NIS 的滑动窗口长度；<=0 关闭
@@ -84,43 +97,77 @@
     # 公共观测距离缩放和辅助 Pose3 prior 噪声。
     # pixel_sigma(distance) = base + quadratic * max(0, distance-ref)^2。
     observation_noise_reference_distance: 5.0  # 距离缩放参考距离
-    pixel_noise_distance_quadratic: 0.04       # 超过参考距离后的像素噪声二次增量
-    pose_prior_sigma: 0.12                     # PnP 辅助 Pose3 prior 基准标准差
-    pose_prior_distance_scale: 0.05            # 辅助 Pose3 prior 超过参考距离后的二次放宽比例
+    pixel_noise_distance_quadratic: 0.06       # 超过参考距离后的像素噪声二次增量
+    pose_prior_sigma: 0.16                     # PnP 辅助 Pose3 prior 基准标准差
+    pose_prior_distance_scale: 0.08            # 辅助 Pose3 prior 超过参考距离后的二次放宽比例
 
     # auto_aim EdgeLoss 风格四边直接重投影因子。
+    # 该因子主要希望补充 yaw 约束；远距离边方向非常敏感，开启后如果 yaw 乱跳，
+    # 优先增大 edge_reproj_sigma 或 edge_reproj_distance_scale，而不是加硬运动模型。
     use_edge_reproj_factor: false              # 是否启用 yaw-only 边重投影因子
     edge_reproj_sigma: 0.06                    # 四边方向角残差标准差，约 2.4deg 边方向误差为 1 sigma
+    edge_reproj_distance_scale: 0.20           # 普通模型 edge yaw 约束超过参考距离后的二次放宽比例
     edge_loss_slope_k: 2.0                     # 角度误差权重斜率
+
+    # 滤波器前端 + 图优化后端模式参数。仅 filter_graph_optimizer 使用同步参数；
+    # prior 参数同时进入 TrackerConfig，普通 graph_optimizer_test 默认不会传入 frontend_state。
+    # 该模式下滤波器输出有两层作用:
+    # 1. 作为当前帧图优化初值，即使 prior.enabled=false 也会生效。
+    # 2. 在 prior.enabled=true 时额外写入弱先验，用来抑制远距离单帧 PnP/像素噪声引起的跳动。
+    frontend:
+      sync_queue_size: 10                      # Armors 和 Result 近似同步缓存长度；检测/滤波延迟抖动大时可适当增大
+      sync_slop: 0.005                          # 允许同步的最大时间差(s)；过大会混入跨帧滤波结果，过小可能丢帧
+      prior:
+        enabled: true                          # 是否把滤波器输出作为弱 prior；关闭后仍会使用滤波器结果作为初值
+        geometry_enabled: true                 # 是否约束 radius/dz；开启会让几何量更贴近滤波器，过硬时可能锁死静态误差
+        center_sigma: 0.20                     # 普通模型 center 位置先验标准差(m)；小=更贴近滤波器中心，大=更信任图优化观测
+        velocity_sigma: 1.0                    # center 速度先验标准差(m/s)；通常比位置软，避免速度估计过度锁死
+        yaw_sigma: 0.25                        # yaw 先验标准差(rad)；小=切换时更连续，大=允许像素因子重新修正角度
+        vyaw_sigma: 1.0                        # yaw 角速度先验标准差(rad/s)；保持较软以兼容突然转向或旋向不确定
+        outpost_base_sigma: 0.30               # 前哨站静态 base_xy/base_z 先验标准差(m)，只在 armor_count=3 时使用
+        radius_sigma: 0.50                     # geometry_enabled=true 时半径先验标准差；半径内部为 logistic 无界状态，不是直接米
+        dz_sigma: 0.30                         # geometry_enabled=true 时 dz/dz2 先验标准差(m)
 
     # 普通四装甲板模型参数。
     standard:
       # 普通四装甲板运动模型参数。前哨站使用 outpost.* 中的独立运动参数。
-      # 当前运动模型是拆分因子图，不是滤波器联合 Q(dt)；这里的 s2q* 表示每帧
-      # Translation/Yaw 因子残差方差，实际标准差为 sqrt(s2q*)。
-      s2qxy: 0.0064                          # x/y 中心每帧积分残差 sigma≈0.08m
-      s2qz: 0.0025                           # z 高度每帧积分残差 sigma≈0.05m
-      s2qyaw: 0.0049                         # yaw 每帧积分残差 sigma≈0.07rad
+      # 当前运动模型是拆分因子图，不是滤波器联合 Q(dt)；这里的 s2q* 表示连续时间
+      # Translation/Yaw 残差强度，代码会乘 sqrt(dt) 转成每帧因子标准差。
+      # 抖动大时先减小 s2qyaw/vyaw_sigma 或放软观测噪声；明显滞后时再反向调整。
+      s2qxy: 0.0064                          # x/y 中心积分残差强度；100Hz 时每帧 sigma≈0.008m
+      s2qz: 0.0025                           # z 高度积分残差强度；100Hz 时每帧 sigma≈0.005m
+      s2qyaw: 0.0049                         # yaw 积分残差强度；100Hz 时每帧 sigma≈0.007rad
 
-      # 速度随机游走标准差。越小表示越强约束 velocity/vyaw 平滑。
+      # 速度随机游走标准差按每秒尺度配置，代码会乘 sqrt(dt) 转成每帧残差。
       vel_sigma: 0.04                        # center velocity 平滑噪声
       vyaw_sigma: 0.05                       # yaw velocity 平滑噪声
-      pixel_noise_std: 1.2                     # 标准装甲板角点重投影像素标准差
+      pixel_noise_std: 1.4                     # 标准装甲板角点重投影像素标准差
       armor_pitch: 0.261799                    # 标准车装甲板 pitch，约 15 度
 
+      # 普通车体几何初值先验。半径是静态几何量，但 r2 需要从 init_r 收敛到真实半径，
+      # 因此这里给中等约束，抑制单帧径向噪声抖动，同时保留厘米级修正空间。
+      prior_sigma:
+        radius: 0.18
+        dz: 0.30
+
       geo:
-        tangential: 0.03                       # 辅助 Pose3 与主状态的切向约束噪声
-        radial: 0.06                           # 辅助 Pose3 与主状态的径向约束噪声
-        height: 0.04                           # 辅助 Pose3 与主状态的高度约束噪声
+        # geo 因子连接辅助 Pose3(PnP/像素) 与主状态(center/yaw/radius/dz)。
+        # radial 越硬，半径/中心径向越容易被单帧 PnP 拉动；yaw 越硬，切换目标时角度越跟随观测。
+        tangential: 0.04                       # 辅助 Pose3 与主状态的切向约束噪声
+        radial: 0.12                           # 辅助 Pose3 与主状态的径向约束噪声；半径主要受这一项影响
+        height: 0.05                           # 辅助 Pose3 与主状态的高度约束噪声
         yaw: 0.16                              # 远距离 PnP yaw 抖动较大，基础几何 yaw 约束稍软
 
     # 前哨站三装甲板模型参数。
     outpost:
       # 前哨站专用运动噪声；不再和普通四装甲板共用上面的 s2q*/vel_sigma/vyaw_sigma。
-      # s2q* 同样表示每帧积分残差方差；前哨站中心近似静止，所以平移项更小。
-      s2qxy: 0.0001                           # x/y 固定中心余量，sigma≈1cm
-      s2qz: 0.0001                            # z 基准高度应稳定，sigma≈1cm
-      s2qyaw: 0.0025                          # yaw 每帧积分残差 sigma≈0.05rad
+      # s2q* 同样按连续时间尺度配置，代码会乘 sqrt(dt) 转成每帧因子标准差；
+      # 前哨站中心近似静止，所以平移项更小。
+      # 如果 center_z 在三块装甲板高度间跳动，优先检查匹配和 height/yaw 观测权重；
+      # 仅把 s2qz 调到极小会稳定 base_z，但可能掩盖 dz/槽位语义问题。
+      s2qxy: 0.0001                           # x/y 固定中心余量；100Hz 时每帧 sigma≈1mm
+      s2qz: 0.0001                            # z 基准高度应稳定；100Hz 时每帧 sigma≈1mm
+      s2qyaw: 0.0025                          # yaw 积分残差强度；100Hz 时每帧 sigma≈0.005rad
       vel_sigma: 0.0002                       # center velocity 平滑噪声
       vyaw_sigma: 0.10                        # yaw velocity 平滑噪声；未知旋向时不能过硬
       # 几何初值，也作为初始化先验的均值。dz_1/dz_2 不再配置，
@@ -155,7 +202,7 @@
 
     # 几何约束距离缩放，作用到 standard.geo/outpost.geo 的 tangential/radial/yaw。
     geo_tangential_distance_scale: 0.20        # tangential 几何噪声超过参考距离后的二次放宽比例
-    geo_radial_distance_scale: 0.20            # radial 几何噪声超过参考距离后的二次放宽比例
+    geo_radial_distance_scale: 0.35            # radial 几何噪声超过参考距离后的二次放宽比例
     geo_yaw_distance_scale: 0.25               # yaw 几何噪声超过参考距离后的二次放宽比例
 
     # 相机内参来自文件顶部的通配 CameraInfo 配置。
@@ -177,6 +224,9 @@
     normal_pitch: 0.0                          # 符面 pitch，固定用于预测和输出
 
     # 能量机关图优化噪声和匹配阈值。
+    # center/roll/vroll 三个 sigma 是运动平滑尺度；pixel/pose/direct 是观测尺度。
+    # roll 抖动大时优先放软 direct_reproj_sigma 或减小 roll_sigma/vroll_sigma；
+    # 匹配失败时优先检查 match_max_roll_diff 和 match_max_center_distance。
     pixel_noise_std: 1.8                       # 五点重投影像素标准差
     center_sigma: 0.03                         # center 运动/先验噪声
     roll_sigma: 0.03                           # roll 运动噪声
@@ -196,6 +246,7 @@
     predict_dt: 0.15                           # 输出击打点和拟合曲线预测时间
 
     # 大符 5 参数曲线拟合器配置，用图优化后的连续 roll 序列拟合/预测。
+    # min_data_size 越大，开始预测越晚但拟合更稳；max_data_size 越大，历史惯性越强。
     big_fitter:
       min_data_size: 100                       # 开始拟合所需最少样本数
       max_data_size: 600                       # 滚动保留的最多样本数

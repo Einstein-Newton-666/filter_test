@@ -9,16 +9,31 @@
 
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace filter_test::graph_optimizer {
 
 // tracker 每帧输入。ROS 相关 TF 和 dt 已经在 node/tracker 调用层处理完毕。
+// frontend_state 是可选前端估计：图优化会把它作为当前帧初值，并可按配置
+// 添加弱 prior；原始装甲板观测仍会照常写入图中参与优化。
 struct TrackerFrameInput {
+    TrackerFrameInput(
+        const auto_aim_interfaces::msg::Armors& armors,
+        double frame_dt = 0.01,
+        Eigen::Isometry3d camera_to_odom = Eigen::Isometry3d::Identity(),
+        std::optional<TrackerState> frontend = std::nullopt)
+        : armors_msg(armors),
+          dt(frame_dt),
+          T_camera_to_odom(std::move(camera_to_odom)),
+          frontend_state(std::move(frontend)) {}
+
     const auto_aim_interfaces::msg::Armors& armors_msg;
     double dt = 0.01;
     Eigen::Isometry3d T_camera_to_odom = Eigen::Isometry3d::Identity();
+    std::optional<TrackerState> frontend_state;
 };
 
 // tracker 对 ROS 发布层的返回值。solve/cold_start/failed 分开表达，
@@ -62,7 +77,9 @@ public:
     uint64_t frameId() const;
 
 private:
-    void initialize(const auto_aim_interfaces::msg::Armors& msg);
+    void initialize(
+        const auto_aim_interfaces::msg::Armors& msg,
+        const TrackerState* frontend_state = nullptr);
     void reset();
     void rememberOutpostState(const TrackerState& state);
     void updateMatchQualityWindow(const std::vector<int>& matched_indices,

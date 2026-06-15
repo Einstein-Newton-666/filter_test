@@ -98,12 +98,30 @@ public:
         insertAux(key(var), value);
     }
 
+    // upsert 只作用于本轮 solve 前的初值缓存。它允许模型先按运动模型插入
+    // 当前帧初值，再用外部前端估计覆盖该初值；已经进入 latest_estimate_ 的
+    // 历史 key 不会被改写。
+    template<typename T>
+    void upsert(const Var<T>& var, const T& value) {
+        upsertAux(key(var), value);
+    }
+
     // insertAux 用于模型自己生成的辅助 key (未注册变量)，如每帧的装甲板 Pose3。
     // 辅助 key 不在变量表中，所以这里只做重复插入保护。
     template<typename T>
     void insertAux(gtsam::Key key, const T& value) {
         if (latest_estimate_.exists(key)) return;
         if (!initial_values_.exists(key)) {
+            initial_values_.insert(key, value);
+        }
+    }
+
+    template<typename T>
+    void upsertAux(gtsam::Key key, const T& value) {
+        if (latest_estimate_.exists(key)) return;
+        if (initial_values_.exists(key)) {
+            initial_values_.update(key, value);
+        } else {
             initial_values_.insert(key, value);
         }
     }

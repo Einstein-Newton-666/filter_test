@@ -1,7 +1,26 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+import yaml
+
+
+def tracker_backend_default_from_yaml(config_path):
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return 'graph'
+
+    backend = (
+        data.get('/**', {})
+        .get('ros__parameters', {})
+        .get('tracker_backend', 'graph')
+    )
+    return backend if backend in ('graph', 'filter_graph') else 'graph'
 
 
 def generate_launch_description():
@@ -10,6 +29,12 @@ def generate_launch_description():
         get_package_share_directory('filter_test'), 'config', 'config.yaml')
     simulation_config = os.path.join(
         get_package_share_directory('armor_simulation'), 'config', 'simulation_config.yaml')
+
+    tracker_backend_arg = DeclareLaunchArgument(
+        'tracker_backend',
+        default_value=tracker_backend_default_from_yaml(filter_test_config),
+        description='Tracker backend: graph or filter_graph')
+    tracker_backend = LaunchConfiguration('tracker_backend')
 
     # 仿真器 (运动 + 相机投影 + 噪声 + PnP, 相机外参从 TF 获取)
     armor_simulation_node = Node(  # noqa: F841
@@ -44,6 +69,9 @@ def generate_launch_description():
         name='filter',
         output='screen',
         parameters=[filter_test_config],
+        condition=IfCondition(PythonExpression([
+            "'", tracker_backend, "' == 'filter_graph'"
+        ])),
     )
 
     # 图优化器 (发布 /tracker/target 给 angle_solver)
@@ -53,6 +81,21 @@ def generate_launch_description():
         name='graph_optimizer_test',
         output='screen',
         parameters=[filter_test_config],
+        condition=IfCondition(PythonExpression([
+            "'", tracker_backend, "' == 'graph'"
+        ])),
+    )
+
+    # 滤波器前端 + 图优化后端 (发布 /tracker/target 给 angle_solver)
+    filter_graph_optimizer_node = Node(  # noqa: F841
+        package='filter_test',
+        executable='filter_graph_optimizer',
+        name='graph_optimizer_test',
+        output='screen',
+        parameters=[filter_test_config],
+        condition=IfCondition(PythonExpression([
+            "'", tracker_backend, "' == 'filter_graph'"
+        ])),
     )
 
     # 能量机关仿真器 (默认不启动，按需取消注释)
@@ -83,12 +126,14 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # armor_simulation_node,
+        tracker_backend_arg,
+        armor_simulation_node,
         gimbal_simulation_node,
         # angle_solver_node,
-        # filter_node,
-        # graph_optimizer_node,
-        rune_simulation_node,
-        rune_graph_optimizer_node,
+        filter_node,
+        graph_optimizer_node,
+        filter_graph_optimizer_node,
+        # rune_simulation_node,
+        # rune_graph_optimizer_node,
         # jlu_tracker_node,
     ])

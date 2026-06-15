@@ -38,6 +38,21 @@ struct PriorNoise {
     double dz = 1.0;
 };
 
+// 滤波器前端模式的弱先验配置。frontend_state 无论 prior 是否启用都会作为
+// 当前帧初值；这些 sigma 只控制额外 prior 因子的权重。geometry 默认关闭，
+// 防止前端半径/dz 误差被静态变量历史 prior 反复累积锁死。
+struct FrontendPriorConfig {
+    bool enabled = true;
+    bool geometry_enabled = false;
+    double center_sigma = 0.20;
+    double velocity_sigma = 1.0;
+    double yaw_sigma = 0.25;
+    double vyaw_sigma = 1.0;
+    double outpost_base_sigma = 0.30;
+    double radius_sigma = 0.50;
+    double dz_sigma = 0.30;
+};
+
 inline constexpr double kDefaultArmorMatchMaxCost = 1.5;
 inline constexpr double kDefaultOutpostAmbiguousMatchMargin = 0.15;
 inline constexpr double kRadiusMin = 0.10;
@@ -71,6 +86,7 @@ struct TrackerConfig {
     double pose_prior_distance_scale = 0.05;
     bool use_edge_reproj_factor = true;
     double edge_reproj_sigma = 0.05;
+    double edge_reproj_distance_scale = 0.10;
     double edge_loss_slope_k = 2.0;
     double standard_armor_pitch = 15.0 * M_PI / 180.0;
     double outpost_armor_pitch = -0.26;
@@ -84,6 +100,7 @@ struct TrackerConfig {
     double geo_yaw_distance_scale = 0.10;
     PriorNoise prior_noise;
     PriorNoise outpost_prior_noise;
+    FrontendPriorConfig frontend_prior;
 
     Eigen::Matrix3d camera_matrix = Eigen::Matrix3d::Identity();
     std::array<double, 5> distortion = {0.0, 0.0, 0.0, 0.0, 0.0};
@@ -94,11 +111,12 @@ struct TrackerConfig {
 struct ObservationNoise {
     double pixel_sigma = 1.0;
     double pose_prior_sigma = 0.1;
+    double edge_reproj_sigma = 0.05;
     GeoNoise geo_noise;
 };
 
-// 当前拆分运动因子的标准差。center/yaw 对应积分残差，
-// velocity/vyaw 对应随机游走残差。
+// 当前帧拆分运动因子的标准差。配置中的运动噪声按连续时间尺度理解，
+// motionNoiseSigmasForConfig() 会乘 sqrt(dt) 转为本帧残差尺度。
 struct MotionNoiseSigmas {
     double center_xy = 1e-6;
     double center_z = 1e-6;
@@ -624,11 +642,13 @@ public:
 
     void initialize(
         const auto_aim_interfaces::msg::Armors& armors_msg,
-        const TrackerState* outpost_reinit_hint = nullptr);
+        const TrackerState* outpost_reinit_hint = nullptr,
+        const TrackerState* frontend_state = nullptr);
     ArmorCvPixelOutput update(
         const auto_aim_interfaces::msg::Armors& armors_msg,
         double dt,
-        const Eigen::Isometry3d& T_camera_to_odom);
+        const Eigen::Isometry3d& T_camera_to_odom,
+        const TrackerState* frontend_state = nullptr);
     void reset();
 
     bool initialized() const { return initialized_; }
@@ -654,6 +674,10 @@ private:
     static Variables declareVariables(auto_graph::GraphOptimizer& optimizer);
 
     void addMotionFactors(double dt);
+    // 用前端估计覆盖当前帧待求解变量的初值，让非线性优化从滤波器附近开始。
+    void applyFrontendStateInitialValue(const TrackerState& frontend_state);
+    // 可选地把前端估计写成弱 prior；它只提供软约束，不替代像素/几何观测因子。
+    void addFrontendPriorFactors(const TrackerState& frontend_state);
     void addObservationFactors(
         const auto_aim_interfaces::msg::Armors& armors_msg,
         const Eigen::Isometry3d& T_camera_to_odom);
@@ -663,7 +687,8 @@ private:
         const Eigen::Isometry3d& T_camera_to_odom,
         const gtsam::SharedNoiseModel& pixel_noise,
         const gtsam::SharedNoiseModel& pose_prior_noise,
-        const gtsam::SharedNoiseModel& geo_noise);
+        const gtsam::SharedNoiseModel& geo_noise,
+        const gtsam::SharedNoiseModel& edge_noise);
     ArmorCvPixelOutput makeOutput(const auto_graph::SolveResult& solve_result);
 
     TrackerConfig config_;

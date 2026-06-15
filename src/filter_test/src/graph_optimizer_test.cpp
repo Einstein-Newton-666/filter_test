@@ -1,5 +1,5 @@
 #include "filter_test/graph_optimizer_test.hpp"
-#include "filter_test/camera_info_utils.hpp"
+#include "filter_test/graph_optimizer_node_utils.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -10,69 +10,6 @@
 #include <sstream>
 
 namespace filter_test {
-namespace {
-
-void declareTrackerParameters(rclcpp::Node& node) {
-    node.declare_parameter("standard.s2qxy", 0.1);
-    node.declare_parameter("standard.s2qz", 0.1);
-    node.declare_parameter("standard.s2qyaw", 0.1);
-    node.declare_parameter("standard.vel_sigma", 0.01);
-    node.declare_parameter("standard.vyaw_sigma", 0.05);
-    node.declare_parameter("outpost.s2qxy", 0.1);
-    node.declare_parameter("outpost.s2qz", 0.0004);
-    node.declare_parameter("outpost.s2qyaw", 0.1);
-    node.declare_parameter("outpost.vel_sigma", 0.01);
-    node.declare_parameter("outpost.vyaw_sigma", 0.05);
-    node.declare_parameter("match_max_cost", graph_optimizer::kDefaultArmorMatchMaxCost);
-    node.declare_parameter(
-        "outpost.ambiguous_match_margin",
-        graph_optimizer::kDefaultOutpostAmbiguousMatchMargin);
-    node.declare_parameter("outpost.debug_height", false);
-    node.declare_parameter("match_quality.window_size", 10);
-    node.declare_parameter("match_quality.failure_threshold", 1.0);
-    node.declare_parameter("match_quality.failure_ratio", 0.60);
-    node.declare_parameter("standard.pixel_noise_std", 1.0);
-    node.declare_parameter("outpost.pixel_noise_std", 2.0);
-    node.declare_parameter("observation_noise_reference_distance", 5.0);
-    node.declare_parameter("pixel_noise_distance_quadratic", 0.025);
-    node.declare_parameter("pose_prior_sigma", 0.1);
-    node.declare_parameter("pose_prior_distance_scale", 0.05);
-    node.declare_parameter("use_edge_reproj_factor", true);
-    node.declare_parameter("edge_reproj_sigma", 0.05);
-    node.declare_parameter("edge_loss_slope_k", 2.0);
-    node.declare_parameter("standard.armor_pitch", 15.0 * M_PI / 180.0);
-    node.declare_parameter("outpost.armor_pitch", -0.26);
-    node.declare_parameter("outpost.radius", 0.2765);
-    node.declare_parameter("outpost.initial_vyaw", 0.0);
-    node.declare_parameter("outpost.prior_sigma.radius", 1.0);
-    node.declare_parameter("outpost.prior_sigma.dz", 1.0);
-    node.declare_parameter("standard.geo.tangential", 0.01);
-    node.declare_parameter("standard.geo.radial", 0.03);
-    node.declare_parameter("standard.geo.height", 0.01);
-    node.declare_parameter("standard.geo.yaw", 0.005);
-    node.declare_parameter("geo_tangential_distance_scale", 0.20);
-    node.declare_parameter("geo_radial_distance_scale", 0.20);
-    node.declare_parameter("geo_yaw_distance_scale", 0.10);
-    node.declare_parameter("outpost.geo.tangential", 0.01);
-    node.declare_parameter("outpost.geo.radial", 0.03);
-    node.declare_parameter("outpost.geo.height", 0.05);
-    node.declare_parameter("outpost.geo.yaw", 0.10);
-
-    node.declare_parameter("camera_name", "narrow_stereo");
-    node.declare_parameter(
-        "camera_info_url",
-        "package://armor_simulation/config/camera_info.yaml");
-
-    node.declare_parameter("verbose", true);
-    node.declare_parameter("cold_start_frames", 3);
-    node.declare_parameter("smoother_lag", 0.0);
-    node.declare_parameter("smoother_type", "incremental");
-    node.declare_parameter("relinearize_threshold", 0.001);
-    node.declare_parameter("extra_iterations", 2);
-}
-
-}  // namespace
-
 GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     : Node("graph_optimizer_test", options) {
     declareTrackerParameters(*this);
@@ -101,94 +38,7 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
 }
 
 graph_optimizer::TrackerConfig GraphOptimizerTest::loadTrackerConfig() {
-    graph_optimizer::TrackerConfig config;
-    config.s2qxy = get_parameter("standard.s2qxy").as_double();
-    config.s2qz = get_parameter("standard.s2qz").as_double();
-    config.s2qyaw = get_parameter("standard.s2qyaw").as_double();
-    config.vel_sigma = get_parameter("standard.vel_sigma").as_double();
-    config.vyaw_sigma = get_parameter("standard.vyaw_sigma").as_double();
-    config.outpost_s2qxy = get_parameter("outpost.s2qxy").as_double();
-    config.outpost_s2qz = get_parameter("outpost.s2qz").as_double();
-    config.outpost_s2qyaw = get_parameter("outpost.s2qyaw").as_double();
-    config.outpost_vel_sigma = get_parameter("outpost.vel_sigma").as_double();
-    config.outpost_vyaw_sigma =
-        get_parameter("outpost.vyaw_sigma").as_double();
-    config.match_max_cost = get_parameter("match_max_cost").as_double();
-    config.outpost_ambiguous_match_margin =
-        get_parameter("outpost.ambiguous_match_margin").as_double();
-    config.match_quality_window_size =
-        get_parameter("match_quality.window_size").as_int();
-    config.match_quality_failure_threshold =
-        get_parameter("match_quality.failure_threshold").as_double();
-    config.match_quality_failure_ratio =
-        get_parameter("match_quality.failure_ratio").as_double();
-    config.pixel_sigma =
-        get_parameter("standard.pixel_noise_std").as_double();
-    config.outpost_pixel_sigma =
-        get_parameter("outpost.pixel_noise_std").as_double();
-    config.observation_noise_reference_distance =
-        get_parameter("observation_noise_reference_distance").as_double();
-    config.pixel_sigma_distance_quadratic =
-        get_parameter("pixel_noise_distance_quadratic").as_double();
-    config.pose_prior_sigma = get_parameter("pose_prior_sigma").as_double();
-    config.pose_prior_distance_scale =
-        get_parameter("pose_prior_distance_scale").as_double();
-    config.use_edge_reproj_factor =
-        get_parameter("use_edge_reproj_factor").as_bool();
-    config.edge_reproj_sigma = get_parameter("edge_reproj_sigma").as_double();
-    config.edge_loss_slope_k = get_parameter("edge_loss_slope_k").as_double();
-    config.standard_armor_pitch =
-        get_parameter("standard.armor_pitch").as_double();
-    config.outpost_armor_pitch =
-        get_parameter("outpost.armor_pitch").as_double();
-    config.outpost_radius = get_parameter("outpost.radius").as_double();
-    config.outpost_initial_vyaw =
-        get_parameter("outpost.initial_vyaw").as_double();
-    config.outpost_prior_noise.radius =
-        get_parameter("outpost.prior_sigma.radius").as_double();
-    config.outpost_prior_noise.dz =
-        get_parameter("outpost.prior_sigma.dz").as_double();
-    config.geo_noise.tangential =
-        get_parameter("standard.geo.tangential").as_double();
-    config.geo_noise.radial =
-        get_parameter("standard.geo.radial").as_double();
-    config.geo_noise.height =
-        get_parameter("standard.geo.height").as_double();
-    config.geo_noise.yaw =
-        get_parameter("standard.geo.yaw").as_double();
-    config.geo_tangential_distance_scale =
-        get_parameter("geo_tangential_distance_scale").as_double();
-    config.geo_radial_distance_scale =
-        get_parameter("geo_radial_distance_scale").as_double();
-    config.geo_yaw_distance_scale =
-        get_parameter("geo_yaw_distance_scale").as_double();
-    config.outpost_geo_noise.tangential =
-        get_parameter("outpost.geo.tangential").as_double();
-    config.outpost_geo_noise.radial =
-        get_parameter("outpost.geo.radial").as_double();
-    config.outpost_geo_noise.height =
-        get_parameter("outpost.geo.height").as_double();
-    config.outpost_geo_noise.yaw =
-        get_parameter("outpost.geo.yaw").as_double();
-
-    // 只在 ROS node 层读取 CameraInfo；typed graph core 仍只接收纯 K/D 数值。
-    const auto calibration = loadCameraCalibrationFromInfo(*this);
-    config.camera_matrix = calibration.camera_matrix;
-    config.distortion = calibration.distortion;
-
-    config.optimizer.cold_start_frames = get_parameter("cold_start_frames").as_int();
-    config.optimizer.verbose = get_parameter("verbose").as_bool();
-    config.optimizer.smoother_lag = get_parameter("smoother_lag").as_double();
-    const std::string smoother_type = get_parameter("smoother_type").as_string();
-    config.optimizer.smoother_type = smoother_type == "batch"
-        ? auto_graph::SmootherType::Batch
-        : auto_graph::SmootherType::Incremental;
-    config.optimizer.relinearize_threshold =
-        get_parameter("relinearize_threshold").as_double();
-    // Keep the ROS parameter name for config compatibility; internally this is
-    // the total number of update calls per solve, including the first update.
-    config.optimizer.update_iterations = get_parameter("extra_iterations").as_int();
-    return config;
+    return loadTrackerConfigFromParameters(*this);
 }
 
 void GraphOptimizerTest::armorsCallback(

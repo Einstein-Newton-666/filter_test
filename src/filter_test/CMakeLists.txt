@@ -45,6 +45,7 @@ ${PROJECT_NAME}__rosidl_typesupport_cpp
 
 set(GRAPH_OPTIMIZER_SOURCES
   src/camera_info_utils.cpp
+  src/graph_optimizer_node_utils.cpp
   src/graph_optimizer/graph_core.cpp
   src/graph_optimizer/armor_model.cpp
   src/graph_optimizer/armor_tracker.cpp
@@ -81,6 +82,21 @@ ${CERES_INCLUDE_DIRS}
 ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
 )
 target_link_libraries(graph_optimizer_test
+filter_test_graph_optimizer
+)
+
+# 滤波器前端 + 图优化后端节点
+ament_auto_add_executable(filter_graph_optimizer
+  src/filter_graph_optimizer.cpp
+)
+target_include_directories(filter_graph_optimizer PUBLIC
+${EIGEN3_INCLUDE_DIR}
+${GTSAM_INCLUDE_DIR}
+${OpenCV_INCLUDE_DIRS}
+${CERES_INCLUDE_DIRS}
+${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+target_link_libraries(filter_graph_optimizer
 filter_test_graph_optimizer
 )
 
@@ -123,6 +139,7 @@ TBB::tbb
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   ament_auto_add_gtest(${PROJECT_NAME}_test
     test/filter_test.cpp
     src/filter.cpp
@@ -147,6 +164,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_auto_graph_optimizer
     filter_test_graph_optimizer
+  )
+  add_test(
+    NAME test_filter_test_launch
+    COMMAND ${Python3_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/test_filter_test_launch.py
   )
 endif()
 
