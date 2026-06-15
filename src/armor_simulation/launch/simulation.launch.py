@@ -17,6 +17,15 @@ def generate_launch_description():
         parameters=[config_file],
     )
 
+    rune_simulation_node = Node(
+        package='armor_simulation',
+        executable='rune_simulation_node',
+        name='rune_simulation_node',
+        output='screen',
+        parameters=[config_file],
+    )
+
     return LaunchDescription([
         armor_simulation_node,
+        # rune_simulation_node,
     ])

@@ -44,25 +44,60 @@ ${PROJECT_NAME}__rosidl_typesupport_cpp
 )
 
 set(GRAPH_OPTIMIZER_SOURCES
+  src/camera_info_utils.cpp
   src/graph_optimizer/graph_core.cpp
   src/graph_optimizer/armor_model.cpp
   src/graph_optimizer/armor_tracker.cpp
+  src/graph_optimizer/rune_model.cpp
+)
+
+ament_auto_add_library(filter_test_graph_optimizer STATIC
+  ${GRAPH_OPTIMIZER_SOURCES}
+)
+target_include_directories(filter_test_graph_optimizer PUBLIC
+  ${EIGEN3_INCLUDE_DIR}
+  ${GTSAM_INCLUDE_DIR}
+  ${OpenCV_INCLUDE_DIRS}
+  ${CERES_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+target_link_libraries(filter_test_graph_optimizer
+  ${PROJECT_NAME}__rosidl_typesupport_cpp
+  ${OpenCV_LIBS}
+  ${CERES_LIBRARIES}
+  gtsam
+  TBB::tbb
 )
 
 # 图优化测试节点 (typed graph_optimizer 框架)
 ament_auto_add_executable(graph_optimizer_test
   src/graph_optimizer_test.cpp
-  ${GRAPH_OPTIMIZER_SOURCES}
 )
 target_include_directories(graph_optimizer_test PUBLIC
 ${EIGEN3_INCLUDE_DIR}
 ${GTSAM_INCLUDE_DIR}
+${OpenCV_INCLUDE_DIRS}
+${CERES_INCLUDE_DIRS}
 ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
 )
 target_link_libraries(graph_optimizer_test
-${PROJECT_NAME}__rosidl_typesupport_cpp
-gtsam
-TBB::tbb
+filter_test_graph_optimizer
+)
+
+# 能量机关图优化节点
+ament_auto_add_executable(rune_graph_optimizer
+  src/rune_graph_optimizer.cpp
+)
+target_include_directories(rune_graph_optimizer PUBLIC
+${EIGEN3_INCLUDE_DIR}
+${GTSAM_INCLUDE_DIR}
+${OpenCV_INCLUDE_DIRS}
+${CERES_INCLUDE_DIRS}
+${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+
+target_link_libraries(rune_graph_optimizer
+filter_test_graph_optimizer
 )
 
 # jlu tracker 独立节点 (移植自 jlu_vision_26)
@@ -101,17 +136,17 @@ if(BUILD_TESTING)
 
   ament_auto_add_gtest(test_auto_graph_optimizer
     test/test_auto_graph_optimizer.cpp
-    ${GRAPH_OPTIMIZER_SOURCES}
   )
   target_include_directories(test_auto_graph_optimizer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
     ${EIGEN3_INCLUDE_DIR}
     ${GTSAM_INCLUDE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+    ${CERES_INCLUDE_DIRS}
   )
   target_link_libraries(test_auto_graph_optimizer
-    gtsam
-    TBB::tbb
+    filter_test_graph_optimizer
   )
 endif()
 

@@ -1,108 +1,186 @@
+# 通配参数会应用到本文件里的所有仿真节点。节点自己的 ros__parameters
+# 可以覆盖这里的默认值；这样 armor/rune 两个模拟器共用相机、噪声和图像发布配置。
+/**:
+  ros__parameters:
+    # 基础发布频率。模拟 detector 输出帧率，单位 Hz。
+    publish_rate: 100
+
+    # ── 相机内参 ──
+    # 对齐 autoaim: 内参只从标准 CameraInfo YAML 读取，不再维护 camera_fx/fy/cx/cy fallback。
+    # 当前 camera_info.yaml 保持本项目既有有效值:
+    #   image 1920×1440, fx=fy=2411, cx=720, cy=640,
+    #   D=[-0.093, 0.154, 0.0001, -0.0006, 0.0]
+    # 外参不在这里配置；运行时通过 TF: odom -> camera_optical_frame 动态获取。
+    camera_name: "narrow_stereo"
+    camera_info_url: "package://armor_simulation/config/camera_info.yaml"
+
+    # ── 像素噪声 — U 形距离模型 + 目标级相关噪声 ──
+    # 单点标准差: σ_pixel(d) = σ_min + k·(d - d_opt)^2
+    # N 个关键点噪声: p_i' = p_i + n_c + n_i
+    #   n_c ~ N(0, (ρσ)^2 I)             # 整个目标共同平移
+    #   n_i ~ N(0, ((sqrt(1-ρ²))σ)^2 I) # 单关键点独立残差
+    # 因此单点总方差仍为 σ²I；ρ 越大，目标形状越稳定，PnP/roll 更不容易被非刚体噪声扭曲。
+    pixel_noise_enabled: true        # false 时跳过像素噪声，得到无噪观测
+    pixel_noise_optimal_distance: 5.0 # 最优检测距离 (m)
+    pixel_noise_common_ratio: 0.9    # ρ: 整体平移噪声占比；保留少量角点独立噪声
+
+    # ── 离群点 ──
+    # 模拟反光、遮挡、误匹配导致的严重像素偏移。
+    use_outliers: false               # true 时模拟少量严重误检，距离越远影响越明显
+    outlier_probability: 0.05
+    outlier_std: 10.0                # 离群标准差 (px)
+
+    # ── 检测概率 ──
+    # P(detect) = P_base * sigmoid(k_area*(A-A_min)) * sigmoid(k_dist*(D_max-d))
+    min_detectable_area: 100.0       # 最小可检测面积 (px²)
+    max_detectable_distance: 8.0     # 最大检测距离 (m)
+    detection_probability: 1.0       # 基础检测概率
+    miss_probability: 0.0            # 基础漏检概率
+    noise_seed: 42                   # 噪声随机种子
+
+    # ── 图像发布 (调试/可视化) ──
+    # armor 使用 /simulation/image，rune 使用 /rune_simulation/image
+    publish_image: false
+    image_resize_scale: 0.5          # 发布前缩放比例；0.5 表示带宽降为约 1/4
+
+    # ── 云台真值追踪 ──
+    # 节点可直接向 /send_pack 发布真值 yaw/pitch，绕过 tracker -> angle_solver 闭环。
+    # armor 瞄准机器人/前哨站中心；rune 优先瞄准当前观测扇叶，其次 active blade 的击打中心。
+    # 本配置只保留一个全局开关，默认一次只启动一个仿真器，避免两路节点同时控制 /send_pack。
+    publish_gimbal_gt: true
+
 /armor_simulation_node:
   ros__parameters:
     # 基础参数
-    publish_rate: 100               # 发布频率 (Hz), 真实检测帧率
+    mode: "standard"                # standard | outpost
 
-    # 过程噪声 — CWNA 连续白噪声加速度模型
-    # a_random = sqrt(q/dt) · N(0,1)
-    # 4秒后: σ_pos≈sqrt(q·t³/3)=1.5m, σ_vel≈sqrt(q·t)=0.6m/s (q_xy=0.1)
-    process_noise_xy: 0.0         # 小幅随机横向运动
-    process_noise_yaw: 0.0         # 小幅随机角加速度
-    process_noise_seed: 42         # 随机种子
+    # ── 普通四装甲板模型参数 ──
+    # 仅 mode="standard" 时使用；保持原普通模型参数，不被前哨站复用。
+    standard:
+      body_roll: 0.0                # 车身整体 roll 倾斜 (rad)
+      body_pitch: 0.0               # 车身整体 pitch 倾斜 (rad)
 
-    # ── 径向距离约束 ──(实际上由于刹车加速度不是无穷大会大于这个范围)
-    radial_min: 4.0                # 最近可检测距离 (m)
-    radial_max: 6.0                # 最远可检测距离 (m)
+      # 过程噪声 — CWNA 连续白噪声加速度模型
+      # a_random = sqrt(q/dt) * N(0,1)
+      # 4 秒后: σ_pos≈sqrt(q*t^3/3)=1.5m, σ_vel≈sqrt(q*t)=0.6m/s (q_xy=0.1)
+      process_noise_xy: 0.0         # 小幅随机横向运动
+      process_noise_yaw: 0.0        # 小幅随机角加速度
+      process_noise_seed: 42        # 过程噪声随机种子
 
-    # 运动限制
-    linear_limit: -1.0             # 关 (用 radial_min/max 替代)
-    angle_limit: -10.0             # 角度限幅 (rad), 负值=不限
-    linear_speed_limit: 1.2        # 线速度限幅 (m/s)
-    angle_speed_limit: 10.0        # 角速度限幅 (rad/s)
-    linear_acceleration: 0.3       # 线加速度 (m/s², 用于边界刹车)
-    angular_acceleration: 0.3924   # 角加速度 (rad/s², ≈π/8)
+      # 径向距离约束；由于刹车加速度不是无穷大，短时可能略超出该范围。
+      radial_min: 4.0               # 最近可检测距离 (m)
+      radial_max: 6.0               # 最远可检测距离 (m)
 
-    # 初始状态
-    # 机器人位于相机正前方 (roll=-90° 时相机沿 -Y 方向看)
-    initial_state:
+      linear_limit: -1.0            # 旧线性位置限幅；负值=关闭，当前用 radial_min/max
+      angle_limit: -10.0            # 角度限幅 (rad)，负值=不限
+      linear_speed_limit: 1.2       # 线速度限幅 (m/s)
+      angle_speed_limit: 10.0       # 角速度限幅 (rad/s)
+      linear_acceleration: 0.3      # 线加速度 (m/s²)，用于边界刹车
+      angular_acceleration: 0.3924  # 角加速度 (rad/s²)，约 π/8
+
+      # 机器人位于相机正前方；云台 TF 中相机 optical frame 沿 -Y 方向看。
+      initial_state:
+        x: 0.0
+        y: -4.0                     # 相机前方 4m
+        yaw: 0.1
+        x_velocity: 0.0
+        y_velocity: 0.0
+        yaw_velocity: 5.0           # 中速旋转
+        x_acceleration: 1.0
+        y_acceleration: 1.0         # 加速远离
+        yaw_acceleration: 0.5       # 旋转加速
+
+      # 普通车辆四装甲板几何参数 (参考 jlu_vision_26)
+      geometry:
+        z1: 0.0                     # 偶数装甲板安装高度 (m)
+        z2: 0.15                    # 奇数装甲板安装高度 (m)
+        r1: 0.25                    # 偶数装甲板半径 (m)
+        r2: 0.40                    # 奇数装甲板半径 (m)
+
+    # 前哨站三装甲板模型；仅 mode="outpost" 时使用。
+    # 运动方程专门特化为:
+    #   center(t) = outpost.center
+    #   yaw(t)    = angular_velocity*t
+    # 也就是只调前哨站自己的位置、固定角速度和三装甲板几何，不复用普通模型参数。
+    outpost:
+      center:
+        x: 0.0
+        y: -7.0
+        z: 1.5
+      angular_velocity: -2.51327412287 # 固定角速度，默认 0.8*pi rad/s；负值表示反向旋转
+      body_roll: 0.0                # 前哨站整体 roll 倾斜 (rad)
+      body_pitch: 0.0               # 前哨站整体 pitch 倾斜 (rad)
+      radius: 0.2765                # 三块装甲板共用半径 (m)
+      dz_1: 0.2                     # 第 2 块高度偏移 (m)
+      dz_2: -0.1                    # 第 3 块高度偏移 (m)
+      armor_pitch: -0.26            # 前哨站装甲板 pitch (rad)
+
+    # 装甲板角点通常比能量机关关键点更稳定，因此这里覆盖通配默认噪声。
+    # 物理依据:
+    #   近处: 边缘跨度大 -> 梯度分散 -> σ↑
+    #   最优 (d≈5m): 边缘 3-5px -> 梯度最集中 -> σ 最小
+    #   远处: 边缘 <2px -> 锯齿 (aliasing) -> σ↑
+    # d=2m≈1.16px, d=3m≈0.96px, d=5m≈0.8px(最优), d=8m≈1.16px, d=12m≈2.76px
+    # σ 调太大时平面 PnP 两个候选解重投影误差会接近，yaw 更容易跳变。
+    pixel_noise_optimal: 1.2        # 最优距离的最小噪声 (px)
+    pixel_noise_curvature: 0.01     # U 形曲率 k
+
+    # 以下仅在 publish_image: true 时生效。
+    image_show_ground_truth: true   # 绿色真值投影角点
+    image_show_noisy: true          # 红色带噪检测角点
+    image_show_labels: true         # 装甲板索引标签
+    image_show_crosshair: true      # 画面中心十字线
+
+    enemy_color: "blue"
+
+/rune_simulation_node:
+  ros__parameters:
+    # 能量机关基础参数
+    rune_mode: "big"                # small | big
+    mode: "big"                     # 旧参数兼容；rune_mode 优先
+
+    # 能量机关中心真值，单位 m，frame=odom。
+    center:
       x: 0.0
-      y: -4.0                      # 相机前方 5m
-      yaw: 0.1
-      x_velocity: 0.0
-      y_velocity: 0.0              # 相机前方运动
-      yaw_velocity: 2.0            # 中速旋转
-      x_acceleration: 0.5
-      y_acceleration: 0.5          # 加速远离
-      yaw_acceleration: 0.3        # 旋转加速
+      y: -5.0
+      z: 1.5
 
-    # 几何参数 (参考 jlu_vision_26)
-    geometry:
-      z1: 0.0                      # 偶数装甲板安装高度 (m)
-      z2: 0.15                     # 奇数装甲板安装高度 (m)
-      r1: 0.28                     # 偶数装甲板半径 (m)
-      r2: 0.38                     # 奇数装甲板半径 (m)
+    # 符面朝向。仿真旋转顺序: Rz(normal_yaw) * Ry(normal_pitch) * Rx(roll)。
+    normal_yaw: 1.57079632679       # 符面法线朝 odom +Y；center=(0,-5,*) 时正对原点相机
+    normal_pitch: 0.0
+    initial_roll: 0.0
+    direction: 1                    # 1=正向，-1=反向
+    require_front_facing: true      # 背向相机时不发布观测
+    blade_switch_interval: 3.0      # 小符 1 片/大符 2 片观测组合切换周期 (s)
+    blade_selector_seed: 42         # 随机 active blade 选择种子
 
-    # ── 相机内参 (参考 jlu_vision_26) ──
-    # jlu_vision_26: fx=2411, 图像 1440×1080
-    # 仿真: 图像 1920×1440, 相同焦距
-    camera_fx: 2411.0
-    camera_fy: 2411.0
-    camera_cx: 720.0
-    camera_cy: 640.0
-    camera_k1: -0.093              # 径向畸变 k1 (桶形)
-    camera_k2: 0.154               # 径向畸变 k2 (枕形修正)
-    camera_p1: 0.0001              # 切向畸变 p1
-    camera_p2: -0.0006             # 切向畸变 p2
-    image_width: 1920
-    image_height: 1440
+    small:
+      angular_velocity: 1.0471975512 # 小符固定角速度，默认 pi/3 rad/s
 
-    # 相机内参 (外参通过 TF odom→camera_optical_frame 动态获取)
+    # 大符真实角速度曲线:
+    #   v(t)=direction*(bias + amplitude*sin(frequency*t + phase) + noise)
+    # roll 由 v(t) 一阶积分得到；random_seed<0 时每次运行随机。
+    big:
+      random_seed: 42
+      velocity_bias_range: [1.045, 1.310]
+      velocity_amplitude_range: [0.780, 1.045]
+      velocity_frequency_range: [1.884, 2.000]
+      velocity_noise_std: 0.03
+      resample_interval: 0.0        # 0=不周期重采样大符参数
+      min_abs_velocity: 0.1
+      max_abs_velocity: 4.0
 
-    # ── 像素噪声 — U 形距离模型 + 装甲板级相关噪声 ──
-    # 单点标准差: σ_pixel(d) = σ_min + k·(d - d_opt)²
-    # 四角点噪声: p_i' = p_i + n_c + n_i
-    #   n_c ~ N(0, (ρσ)^2 I)                         # 整块装甲板共同平移
-    #   n_i ~ N(0, ((sqrt(1-ρ²))σ)^2 I)               # 单角点独立残差
-    # 因此 Var(n_c+n_i)=σ²I, 单角点总方差不变；ρ 越大越少破坏矩形形状,
-    # PnP yaw 抖动越小。ρ=0 退化为四角点完全独立噪声。
-    pixel_noise_enabled: true        # 关闭像素噪声 → PnP 无噪
-    # 物理依据: 角点检测精度由边缘梯度质量决定
-    #   近处: 边缘跨度大 → 梯度分散 → σ↑
-    #   最优 (d≈5m): 边缘 3-5px → 梯度最集中 → σ 最小
-    #   远处: 边缘 <2px → 锯齿 (aliasing) → σ↑
-    # d=2m→2.6px  d=3m→2.0px  d=5m→1.5px(最优)  d=8m→2.6px  d=12m→7.6px
-    # 注意: 3D 位姿误差的距离缩放由 PnP 自动完成，无需在像素层重复
-    # σ 调太大时平面 PnP 的两个候选解重投影误差会接近, yaw 更容易跳变。
-    pixel_noise_optimal: 0.5          # 最优距离的最小噪声 (px)
-    pixel_noise_optimal_distance: 5.0 # 最优距离 (m)
-    pixel_noise_curvature: 0.025      # 曲率 k
-    pixel_noise_common_ratio: 0.7      # ρ: 整体平移噪声占比；建议 0.7~0.9
+    # 能量机关五点观测通常比装甲板角点更细，保留较大的默认像素噪声。
+    pixel_noise_optimal: 2.0
+    pixel_noise_curvature: 0.10
 
-    # ── 离群点 ──
-    # 模拟真实检测器的严重偏离 (反光、遮挡、误匹配)
-    use_outliers: false            # 是否启用
-    outlier_probability: 0.05      # 每个角点离群概率 (5%)
-    outlier_std: 10.0              # 离群标准差 (px)
+    # 以下仅在 publish_image: true 时生效。
+    image_show_ground_truth: true   # 绿色真值目标框和半径线
+    image_show_noisy: true          # 红色带噪观测目标框和半径线
+    image_show_labels: true         # 扇叶 slot 标签，仅图像调试用
+    image_show_crosshair: true      # 画面中心十字线
+    image_show_radius_lines: true   # 中心点到击打中心的半径线
 
-    # ── 检测概率 ──
-    # P(detect) = P_base · sigmoid(k_area·(A-A_min)) · sigmoid(k_dist·(D_max-d))
-    min_detectable_area: 100.0     # 最小可检测面积 (px²)
-    max_detectable_distance: 8.0   # 最大检测距离 (m)
-    detection_probability: 1.0     # 基础检测概率
-    miss_probability: 0.0          # 基础漏检概率
-    
-    # ── 图像发布 (调试/可视化) ──
-    publish_image: false           # 发布 /simulation/image 查看仿真画面
-    # 以下仅在 publish_image: true 时生效
-    image_show_ground_truth: true  # 绿色真值投影角点
-    image_show_noisy: true         # 红色带噪检测角点
-    image_show_labels: true        # 装甲板索引标签
-    image_show_crosshair: true     # 画面中心十字线
-    image_resize_scale: 0.5       # 发布前缩放比例 (0.5=长宽各一半, 带宽降4倍)
-
-    # ── 云台真值追踪 (发布 /send_pack 供 gimbal 直接跟踪) ──
-    publish_gimbal_gt: true        # 替代 tracker→angle_solver 闭环, 云台直指机器人
-
-    # 通用
-    noise_seed: 42                 # 噪声随机种子
-    enemy_color: "blue"            # 敌方颜色
+/gimbal_simulation:
+  ros__parameters:
+    publish_rate: 200               # 云台 TF/反馈发布频率 (Hz)

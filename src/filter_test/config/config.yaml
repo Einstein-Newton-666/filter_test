@@ -1,86 +1,236 @@
+/**:
+  ros__parameters:
+    # 通配参数会应用到本文件里的所有 filter_test 节点。
+    # 节点块仍可单独覆盖这里的默认值；CameraInfo 是图优化和 jlu_tracker 的统一内参来源。
+    camera_name: "narrow_stereo"
+    camera_info_url: "package://armor_simulation/config/camera_info.yaml"
+
 /filter:
   ros__parameters:
-    # CV模型过程噪声参数
-    s2qxy_cv: 0.1
-    s2qz_cv: 0.1
-    s2qyaw_cv: 0.5
-    s2qr_cv: 10.0
-    s2qdz_cv: 0.1
+    # 传统 EKF/UKF armor filter 参数。这里只影响 /filter 节点；
+    # typed GTSAM 图优化使用 /graph_optimizer_test 下的独立参数。
 
-    # Singer模型过程噪声参数
-    s2qxy_singer: 0.05
-    s2qz_singer: 0.05
-    s2qyaw_singer: 0.1
-    s2qr_singer: 10.0
-    s2qdz_singer: 0.01
-    tau_singer: 2.0
+    # 普通装甲板滤波模型参数。前哨站使用 outpost.* 中的独立参数。
+    standard:
+      # CV 模型过程噪声对角项，状态为:
+      # [xc, vxc, yc, vyc, za, vza, yaw, vyaw, r1_u, r2_u, dz]
+      # 数值越大，滤波器越相信目标可快速机动或几何量可变化。
+      s2qxy_cv: 0.08         # x/y 中心位置-速度白噪声强度
+      s2qz_cv: 0.02          # z 高度通常慢变，弱于平面机动
+      s2qyaw_cv: 0.18        # 普通车 yaw 可机动，但不应完全跟随单帧 PnP
+      s2qr_cv: 1.0           # 半径是车体几何量，只允许很慢漂移
+      s2qdz_cv: 0.02         # 高低装甲板高度差是几何量，只允许慢漂移
 
-    # UKF参数
-    ukf_alpha: 0.01
-    ukf_beta: 2.0
-    ukf_kappa: 0.0
+      # Singer 模型过程噪声对角项，状态为:
+      # [x, vx, ax, y, vy, ay, z, vz, az, yaw, vyaw, ayaw, r1, r2, dz]
+      s2qxy_singer: 0.04     # x/y 机动加速度噪声
+      s2qz_singer: 0.015     # z 方向机动弱于平面运动
+      s2qyaw_singer: 0.05    # yaw 角加速度噪声
+      s2qr_singer: 1.0       # r1/r2 半径静态量过程噪声
+      s2qdz_singer: 0.01     # dz 高度差静态量过程噪声
 
-    # 仿真模式R参数（固定R，无PnP误差）
+      # Detector 模式观测 R 对角项。观测量为 yaw、pitch、distance、armor yaw；
+      # distance 项在代码中还会按距离和装甲板朝向放大。
+      r_pose_det: 0.0002     # yaw/pitch 角度观测方差，std≈0.014rad
+      r_distance_det: 0.0016 # distance 方差基准，5m 时 std≈0.2m
+      r_yaw_det: 0.02        # 装甲板朝向 yaw 方差，std≈0.14rad
 
-    # 检测器模式R参数（距离相关R，有PnP误差）
-    r_pose_det: 0.01
-    r_distance_det: 0.01
-    r_yaw_det: 0.05
+    # 普通和前哨站共用的滤波器参数。
+    tau_singer: 2.0        # Singer 机动时间常数，越大加速度衰减越慢
 
+    # UKF sigma point 参数。use_ekf=false 时生效。
+    ukf_alpha: 0.01        # sigma point 分布尺度
+    ukf_beta: 2.0          # 高斯先验通常取 2
+    ukf_kappa: 0.0         # 二级尺度参数，通常保持 0
+
+    # 传统滤波器几何初值。前哨站模式下 r1=radius，dz_1/dz_2 由首帧观测 z 差初始化。
     init_r: 0.25
-    
-    # 滤波器选择参数
-    use_ekf: false
-    use_cv_model: true
+    outpost_radius: 0.2765
+    outpost:
+      # 前哨站专用过程噪声，可独立于普通四装甲板调参。
+      s2qxy_cv: 0.002
+      s2qz_cv: 0.001
+      s2qyaw_cv: 0.08
+      s2qr_cv: 0.01
+      s2qdz_cv: 0.02
+
+      s2qxy_singer: 0.0015
+      s2qz_singer: 0.0008
+      s2qyaw_singer: 0.08
+      s2qr_singer: 0.01
+      s2qdz_singer: 0.015
+
+      # 前哨站专用 detector 观测噪声。
+      r_pose_det: 0.0002
+      r_distance_det: 0.003
+      r_yaw_det: 0.03
+
+    # 滤波器和模型选择。
+    use_ekf: false         # true=EKF, false=UKF
+    use_cv_model: false      # true=CV 11D, false=Singer 15D
 
 /graph_optimizer_test:
   ros__parameters:
-    verbose: false            # 关闭 [GO] 调试输出
+    # 实时装甲板 typed GTSAM 图优化节点参数。
+    verbose: false         # 是否打印 [GO] 调试输出
 
-    # CV模型过程噪声参数 (对角噪声: 方差)
-    s2qxy: 0.1         # σ_pos=0.32m (松噪声适应 6D 密集团结构)
-    s2qz: 0.1          # σ_pos_z=0.32m
-    s2qyaw: 0.1        # σ_yaw=0.32rad
+    # 公共匹配质量门控，普通四装甲板和前哨站都会使用。
+    match_max_cost: 2.2    # 普通/前哨站均为 yaw_diff + 3*pos_err，超过则拒绝观测
+    match_quality:
+      window_size: 10                       # 类 autoaim NIS 的滑动窗口长度；<=0 关闭
+      failure_threshold: 1.0                # 匹配 cost 超过该值记为一次质量失败
+      failure_ratio: 0.60                   # 窗口内失败比例超过该值则 reset，重新初始化
 
-    # 速度平滑噪声
-    vel_sigma: 0.01
-    vyaw_sigma: 0.05
-    match_max_cost: 1.5     # yaw_diff + 3*pos_err，超过则拒绝观测，避免错配污染 r/dz
+    # 公共观测距离缩放和辅助 Pose3 prior 噪声。
+    # pixel_sigma(distance) = base + quadratic * max(0, distance-ref)^2。
+    observation_noise_reference_distance: 5.0  # 距离缩放参考距离
+    pixel_noise_distance_quadratic: 0.04       # 超过参考距离后的像素噪声二次增量
+    pose_prior_sigma: 0.12                     # PnP 辅助 Pose3 prior 基准标准差
+    pose_prior_distance_scale: 0.05            # 辅助 Pose3 prior 超过参考距离后的二次放宽比例
 
-    # 像素噪声（用于2D观测模式）
-    pixel_noise_std: 1.0
+    # auto_aim EdgeLoss 风格四边直接重投影因子。
+    use_edge_reproj_factor: false              # 是否启用 yaw-only 边重投影因子
+    edge_reproj_sigma: 0.06                    # 四边方向角残差标准差，约 2.4deg 边方向误差为 1 sigma
+    edge_loss_slope_k: 2.0                     # 角度误差权重斜率
 
-    # 冷启动帧数 (2D观测模式)
+    # 普通四装甲板模型参数。
+    standard:
+      # 普通四装甲板运动模型参数。前哨站使用 outpost.* 中的独立运动参数。
+      # 当前运动模型是拆分因子图，不是滤波器联合 Q(dt)；这里的 s2q* 表示每帧
+      # Translation/Yaw 因子残差方差，实际标准差为 sqrt(s2q*)。
+      s2qxy: 0.0064                          # x/y 中心每帧积分残差 sigma≈0.08m
+      s2qz: 0.0025                           # z 高度每帧积分残差 sigma≈0.05m
+      s2qyaw: 0.0049                         # yaw 每帧积分残差 sigma≈0.07rad
+
+      # 速度随机游走标准差。越小表示越强约束 velocity/vyaw 平滑。
+      vel_sigma: 0.04                        # center velocity 平滑噪声
+      vyaw_sigma: 0.05                       # yaw velocity 平滑噪声
+      pixel_noise_std: 1.2                     # 标准装甲板角点重投影像素标准差
+      armor_pitch: 0.261799                    # 标准车装甲板 pitch，约 15 度
+
+      geo:
+        tangential: 0.03                       # 辅助 Pose3 与主状态的切向约束噪声
+        radial: 0.06                           # 辅助 Pose3 与主状态的径向约束噪声
+        height: 0.04                           # 辅助 Pose3 与主状态的高度约束噪声
+        yaw: 0.16                              # 远距离 PnP yaw 抖动较大，基础几何 yaw 约束稍软
+
+    # 前哨站三装甲板模型参数。
+    outpost:
+      # 前哨站专用运动噪声；不再和普通四装甲板共用上面的 s2q*/vel_sigma/vyaw_sigma。
+      # s2q* 同样表示每帧积分残差方差；前哨站中心近似静止，所以平移项更小。
+      s2qxy: 0.0001                           # x/y 固定中心余量，sigma≈1cm
+      s2qz: 0.0001                            # z 基准高度应稳定，sigma≈1cm
+      s2qyaw: 0.0025                          # yaw 每帧积分残差 sigma≈0.05rad
+      vel_sigma: 0.0002                       # center velocity 平滑噪声
+      vyaw_sigma: 0.10                        # yaw velocity 平滑噪声；未知旋向时不能过硬
+      # 几何初值，也作为初始化先验的均值。dz_1/dz_2 不再配置，
+      # 而是由首帧观测中 index1/index2 相对 slot0 基准观测的 z 差初始化。
+      radius: 0.2765                           # 三块装甲板共用半径
+      armor_pitch: -0.26                       # 前哨站装甲板 pitch
+      initial_vyaw: 0.0                        # 前哨站中心 yaw 角速度初值；update 阶段和普通模型一样由 vyaw_sigma 平滑
+
+      # 静态几何初值先验；和普通模型一样不使用 center z 高度先验做首帧槽位消歧。
+      prior_sigma:
+        radius: 0.008                          # radius 几何初值的先验标准差；前哨站物理半径固定，同时保留毫米级装配误差
+        dz: 0.30                               # dz_1/dz_2 几何初值的先验标准差
+
+      # 观测和几何因子噪声。pixel 是角点重投影噪声；geo 是辅助 Pose3 拉回主状态的噪声。
+      ambiguous_match_margin: 0.25             # 兼容保留；当前前哨站匹配按普通模型 yaw+position 选槽位，不用该值拒绝
+      debug_height: false                      # 打印前哨站观测 z、yaw 匹配 slot 和求解后高度残差
+      pixel_noise_std: 1.4                     # 前哨站角点重投影像素标准差
+      geo:
+        tangential: 0.10                       # 辅助 Pose3 与主状态的切向约束噪声
+        radial: 0.12                           # 辅助 Pose3 与主状态的径向约束噪声
+        height: 0.10                           # 前哨站 base_z + dz_slot 高度几何残差噪声
+        yaw: 0.32                              # 前哨站 yaw 几何约束噪声
+
+    # 冷启动阶段会累计若干帧再输出，用于让静态几何变量先收敛。
     cold_start_frames: 3
 
-    # 固定滞后平滑器: 0=纯iSAM2无边际化, N=保留N帧
-    smoother_lag: 10.0        # 0=纯ISAM2 (先验证收敛)
-    smoother_type: "incremental"  # "incremental" (iSAM2,快) 或 "batch" (LM,稳)
-    extra_iterations: 2      # 每次 solve 的 update 总次数；参数名为兼容旧配置保留
-    relinearize_threshold: 0.001  # 更频繁重线性化 (ISAM2 默认 0.01)
+    # fixed-lag smoother / iSAM2 生命周期参数。
+    smoother_lag: 30.0                         # 0=不边际化；N=保留最近 N 秒状态
+    smoother_type: "incremental"               # "incremental"=iSAM2, "batch"=LM
+    extra_iterations: 2                        # 每帧 solve 的 update 总次数
+    relinearize_threshold: 0.001               # iSAM2 重线性化阈值，越小越频繁
 
-    # 几何约束噪声 [tangential, radial, z, yaw]
-    geo_tangential: 0.01
-    geo_radial: 0.03
-    geo_height: 0.01
-    geo_yaw: 0.05     # 放宽防止 yaw 约束过强 (4000:1 vs 运动因子) 导致数值奇异
+    # 几何约束距离缩放，作用到 standard.geo/outpost.geo 的 tangential/radial/yaw。
+    geo_tangential_distance_scale: 0.20        # tangential 几何噪声超过参考距离后的二次放宽比例
+    geo_radial_distance_scale: 0.20            # radial 几何噪声超过参考距离后的二次放宽比例
+    geo_yaw_distance_scale: 0.25               # yaw 几何噪声超过参考距离后的二次放宽比例
 
-    # 相机内参 (外参从 TF 树 odom→camera_optical_frame 动态获取)
-    camera_fx: 2411.0
-    camera_fy: 2411.0
-    camera_cx: 720.0
-    camera_cy: 640.0
+    # 相机内参来自文件顶部的通配 CameraInfo 配置。
+    # 这里不再配置 camera_fx/fy/cx/cy 或 distortion_*，避免仿真端和图优化端不一致。
+    # 外参从 TF 树 odom -> camera_optical_frame 动态获取。
 
-    # 畸变系数
-    distortion_k1: -0.093
-    distortion_k2: 0.154
-    distortion_p1: 0.0001
-    distortion_p2: -0.0006
+/rune_graph_optimizer:
+  ros__parameters:
+    # 能量机关 typed GTSAM 图优化节点。输入为 detector 风格 RuneTargets 五点像素观测。
+    targets_topic: "/rune_detector/rune_targets"
+    verbose: false
+
+    # 冷启动几何先验。normal_pitch 是固定参数，不进入图优化状态。
+    initial_center:
+      x: 0.0
+      y: -5.0
+      z: 1.5
+    normal_yaw: 1.57079632679                  # 符面法向 yaw 初值/静态先验
+    normal_pitch: 0.0                          # 符面 pitch，固定用于预测和输出
+
+    # 能量机关图优化噪声和匹配阈值。
+    pixel_noise_std: 1.8                       # 五点重投影像素标准差
+    center_sigma: 0.03                         # center 运动/先验噪声
+    roll_sigma: 0.03                           # roll 运动噪声
+    vroll_sigma: 0.05                          # roll 角速度运动噪声
+    pose_prior_sigma: 0.20                     # 预测辅助 Pose3 prior 标准差
+    pnp_pose_prior_sigma: 0.08                 # PnP 成功时辅助 Pose3 prior 标准差
+
+    use_direct_reproj_factor: true             # 是否启用只连接 roll 的 direct roll loss
+    direct_reproj_sigma: 0.05                  # direct roll loss 标准差，残差为归一化误差
+    normal_yaw_sigma: 0.03                     # normal_yaw 静态先验/约束噪声
+    match_max_roll_diff: 0.35                  # 观测扇叶匹配最大 roll 差，约 20 度
+    match_max_center_distance: 0.6             # 观测中心和预测中心最大距离
+
+    use_direct_reproj_match_fallback: true     # roll/center 匹配失败时是否尝试 direct reproj 匹配
+    match_max_direct_reproj_error: 0.20        # fallback direct reproj 最大归一化误差
+
+    predict_dt: 0.15                           # 输出击打点和拟合曲线预测时间
+
+    # 大符 5 参数曲线拟合器配置，用图优化后的连续 roll 序列拟合/预测。
+    big_fitter:
+      min_data_size: 100                       # 开始拟合所需最少样本数
+      max_data_size: 600                       # 滚动保留的最多样本数
+      max_iterations: 30                       # 单次拟合最大迭代次数
+
+    # GraphOptimizer 生命周期参数。
+    cold_start_frames: 5
+    smoother_lag: 10.0
+    smoother_type: "incremental"
+    extra_iterations: 2
+    relinearize_threshold: 0.001
+
+    # CameraInfo 使用文件顶部通配配置，供 PnP prior、五点重投影因子和 direct roll loss 投影使用。
+    # 必须和 rune_simulation_node 保持一致。
+
 /jlu_tracker:
   ros__parameters:
-    # 冷启动帧数 (对齐 jlu_vision_26 默认 5, 保证静态变量充分收敛)
-    cold_start_frames: 5
+    # jlu_tracker adapter 参数。
+    cold_start_frames: 5                       # 对齐 jlu_vision_26 默认 5，保证静态变量充分收敛
+    # CameraInfo 使用文件顶部通配配置，读取 cv::Mat K/D。
 
 /gimbal_simulation:
   ros__parameters:
-    publish_rate: 200
+    # 云台仿真发布频率、S-curve 限速和相机相对云台外参。
+    publish_rate: 200             # 云台状态、/recieve_pack 和 TF 发布频率 (Hz)
+
+    max_yaw_vel: 314.1592653589793 # yaw 最大角速度 (rad/s)，用于限制单帧 yaw 步长
+    max_pitch_vel: 314.1592653589793 # pitch 最大角速度 (rad/s)，用于限制单帧 pitch 步长
+    max_yaw_acc: 3141.592653589793 # yaw 最大角加速度 (rad/s²)，当前仅声明/读取，update 中未参与限幅
+    max_pitch_acc: 314.1592653589793 # pitch 最大角加速度 (rad/s²)，当前仅声明/读取，update 中未参与限幅
+
+    s_curve_duration: 0.1          # 目标角变化后的 S-curve 插值总时间 (s)
+
+    shoot_speed: 23.0              # 反馈给 angle_solver 的弹速 (m/s)
+
+    camera_gimbal_tx: 0.0          # camera_link 相对 gimbal_link 的 x 平移 (m)
+    camera_gimbal_ty: -0.045       # camera_link 相对 gimbal_link 的 y 平移 (m)
+    camera_gimbal_tz: 0.08557      # camera_link 相对 gimbal_link 的 z 平移 (m)

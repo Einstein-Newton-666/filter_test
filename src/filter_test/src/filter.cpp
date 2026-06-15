@@ -2,14 +2,29 @@
 #include "filter_test/filters/cv_model.hpp"
 #include "filter_test/filters/singer_model.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
 ArmorFilter::ArmorFilter(bool use_ekf, bool use_cv_model,
     double s2qxy_cv, double s2qz_cv, double s2qyaw_cv, double s2qr_cv, double s2qdz_cv,
     double s2qxy_singer, double s2qz_singer, double s2qyaw_singer, double s2qr_singer, double s2qdz_singer,
     double tau_singer,
-    double ukf_alpha, double ukf_beta, double ukf_kappa)
+    double ukf_alpha, double ukf_beta, double ukf_kappa,
+    double outpost_radius,
+    double init_r_param,
+    double outpost_s2qxy_cv, double outpost_s2qz_cv,
+    double outpost_s2qyaw_cv, double outpost_s2qr_cv,
+    double outpost_s2qdz_cv,
+    double outpost_s2qxy_singer, double outpost_s2qz_singer,
+    double outpost_s2qyaw_singer, double outpost_s2qr_singer,
+    double outpost_s2qdz_singer,
+    double outpost_r_pose_det, double outpost_r_distance_det,
+    double outpost_r_yaw_det)
     : use_ekf_(use_ekf), use_cv_model_(use_cv_model)
 {
-    init_r = 0.25;
+    init_r = init_r_param;
     
     // CV模型过程噪声参数
     s2qxy_cv_ = s2qxy_cv;
@@ -24,6 +39,16 @@ ArmorFilter::ArmorFilter(bool use_ekf, bool use_cv_model,
     s2qyaw_singer_ = s2qyaw_singer;
     s2qr_singer_ = s2qr_singer;
     s2qdz_singer_ = s2qdz_singer;
+    outpost_s2qxy_cv_ = outpost_s2qxy_cv;
+    outpost_s2qz_cv_ = outpost_s2qz_cv;
+    outpost_s2qyaw_cv_ = outpost_s2qyaw_cv;
+    outpost_s2qr_cv_ = outpost_s2qr_cv;
+    outpost_s2qdz_cv_ = outpost_s2qdz_cv;
+    outpost_s2qxy_singer_ = outpost_s2qxy_singer;
+    outpost_s2qz_singer_ = outpost_s2qz_singer;
+    outpost_s2qyaw_singer_ = outpost_s2qyaw_singer;
+    outpost_s2qr_singer_ = outpost_s2qr_singer;
+    outpost_s2qdz_singer_ = outpost_s2qdz_singer;
     
     // Singer模型机动时间常数
     tau_singer_ = tau_singer;
@@ -32,8 +57,12 @@ ArmorFilter::ArmorFilter(bool use_ekf, bool use_cv_model,
     ukf_alpha_ = ukf_alpha;
     ukf_beta_ = ukf_beta;
     ukf_kappa_ = ukf_kappa;
+    outpost_radius_ = outpost_radius;
 
     r_pose_ = 0.01, r_distance_ = 0.01, r_yaw_ = 0.01;
+    outpost_r_pose_ = outpost_r_pose_det;
+    outpost_r_distance_ = outpost_r_distance_det;
+    outpost_r_yaw_ = outpost_r_yaw_det;
     use_fixed_r_ = false;
 
     last_armor_number = 0;
@@ -45,7 +74,7 @@ ArmorFilter::ArmorFilter(bool use_ekf, bool use_cv_model,
 
 void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
     //选择最中心的装甲板初始化 TODO：同时使用两块装甲板初始化
-    int index;
+    int index = 0;
     double min_yaw_diff = M_PI;
     for (size_t i = 0; i < armors_msg->armors.size(); i++){
         double yaw_diff = abs(orientationToYaw(armors_msg->armors[i].pose.orientation));
@@ -55,23 +84,63 @@ void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
         }
     }
 
+    tracking_outpost_ = armors_msg->armors[index].number == "outpost";
     double yaw = orientationToYaw(armors_msg->armors[index].pose.orientation);
+    const double center_yaw = yaw;
+    const double init_radius = tracking_outpost_ ? outpost_radius_ : init_r;
+    double observed_dz_1 = 0.0;
+    double observed_dz_2 = 0.0;
+    if (tracking_outpost_) {
+        const double base_z = armors_msg->armors[index].pose.position.z;
+        std::array<bool, 3> seen = {true, false, false};
+        for (size_t i = 0; i < armors_msg->armors.size(); ++i) {
+            if (static_cast<int>(i) == index ||
+                armors_msg->armors[i].number != "outpost") {
+                continue;
+            }
+            double delta = angles::normalize_angle(
+                orientationToYaw(armors_msg->armors[i].pose.orientation) - yaw);
+            if (delta < 0.0) {
+                delta += 2.0 * M_PI;
+            }
+            const int slot = static_cast<int>(
+                std::llround(delta / (2.0 * M_PI / 3.0))) % 3;
+            if (slot <= 0 || seen[static_cast<std::size_t>(slot)]) {
+                continue;
+            }
+            seen[static_cast<std::size_t>(slot)] = true;
+            const double dz =
+                armors_msg->armors[i].pose.position.z - base_z;
+            if (slot == 1) {
+                observed_dz_1 = dz;
+            } else if (slot == 2) {
+                observed_dz_2 = dz;
+            }
+        }
+    }
     Eigen::VectorXd x;
     if (use_cv_model_) {
         // cv_model: x = [xc, vxc, yc, vyc, za, vza, yaw, vyaw, r1, r2, dz], size = 11
+        // outpost 兼容映射: [r1, r2, dz] = [radius, dz_1, dz_2]
         x.resize(11);
-        x << armors_msg->armors[index].pose.position.x + init_r * cos(yaw), 0,  
-            armors_msg->armors[index].pose.position.y + init_r * sin(yaw), 0,
+        x << armors_msg->armors[index].pose.position.x + init_radius * cos(yaw), 0,
+            armors_msg->armors[index].pose.position.y + init_radius * sin(yaw), 0,
             armors_msg->armors[index].pose.position.z, 0,
-            yaw, 0, init_r, init_r, 0;  // dz = 0 (初始时认为两块装甲板等高)
+            center_yaw, 0,
+            tracking_outpost_ ? outpost_radius_ : init_r,
+            tracking_outpost_ ? observed_dz_1 : init_r,
+            tracking_outpost_ ? observed_dz_2 : 0.0;
     } else {
         // singer_model: x = [x, vx, ax, y, vy, ay, z, vz, az, yaw, vyaw, ayaw, r1, r2, dz], size = 15
+        // outpost 兼容映射: [r1, r2, dz] = [radius, dz_1, dz_2]
         x.resize(15);
-        x << armors_msg->armors[index].pose.position.x + init_r * cos(yaw), 0, 0,
-            armors_msg->armors[index].pose.position.y + init_r * sin(yaw), 0, 0,
+        x << armors_msg->armors[index].pose.position.x + init_radius * cos(yaw), 0, 0,
+            armors_msg->armors[index].pose.position.y + init_radius * sin(yaw), 0, 0,
             armors_msg->armors[index].pose.position.z, 0, 0,
-            yaw, 0, 0,
-            init_r, init_r, 0;  // dz = 0 (初始时认为两块装甲板等高)
+            center_yaw, 0, 0,
+            tracking_outpost_ ? outpost_radius_ : init_r,
+            tracking_outpost_ ? observed_dz_1 : init_r,
+            tracking_outpost_ ? observed_dz_2 : 0.0;
     }
 
     if (use_ekf_) {
@@ -82,8 +151,15 @@ void ArmorFilter::init(auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
     }
 
     last_time_ = armors_msg->header.stamp;
-    last_yaw = yaw;
+    last_yaw = center_yaw;
     last_armor_number = armors_msg->armors.size();
+    if (use_cv_model_) {
+        last_result_ << x[0], x[2], x[4], x[1], x[3], x[5],
+            x[6], x[7], x[8], x[9], x[10];
+    } else {
+        last_result_ << x[0], x[3], x[6], x[1], x[4], x[7],
+            x[9], x[10], x[12], x[13], x[14];
+    }
 }
 
 Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::SharedPtr &armors_msg){
@@ -99,6 +175,12 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
     int armor_number = armors_msg->armors.size();
     // if(armor_number == 2 && last_armor_number == 1) {last_yaw += M_PI_2; std::cout<<" s "<<std::endl;}
     last_armor_number = armor_number;
+    const bool outpost_frame = std::any_of(
+        armors_msg->armors.begin(), armors_msg->armors.end(),
+        [](const auto_aim_interfaces::msg::Armor& armor) {
+            return armor.number == "outpost";
+        });
+    tracking_outpost_ = outpost_frame;
 
     rclcpp::Time time_now = armors_msg->header.stamp;
     double dt = (time_now - last_time_).seconds();
@@ -164,13 +246,34 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
 
     auto calculate_yaw_diff = [&](int idx, double observed_yaw) {
         // cv_model: yaw at index 6, singer_model: yaw at index 9
-        const double predicted_yaw = (use_cv_model_ ? x[6] : x[9]) + idx * M_PI_2;
+        const double yaw_step = tracking_outpost_ ? (2.0 * M_PI / 3.0) : M_PI_2;
+        const double predicted_yaw = (use_cv_model_ ? x[6] : x[9]) + idx * yaw_step;
         return std::abs(angles::shortest_angular_distance(observed_yaw, predicted_yaw));
       };
-    
+
       std::vector<int> index;
+      if (tracking_outpost_) {
+        std::array<bool, 3> used = {false, false, false};
+        for (const auto& armor : armors_msg->armors) {
+          const double obs_yaw = orientationToYaw(armor.pose.orientation);
+          int best_idx = -1;
+          double min_diff = std::numeric_limits<double>::max();
+          for (int i = 0; i < 3; ++i) {
+            if (used[static_cast<std::size_t>(i)]) continue;
+            const double diff = calculate_yaw_diff(i, obs_yaw);
+            if (diff < min_diff) {
+              min_diff = diff;
+              best_idx = i;
+            }
+          }
+          if (best_idx >= 0) {
+            used[static_cast<std::size_t>(best_idx)] = true;
+            index.push_back(best_idx);
+          }
+        }
+      }
       // 单装甲板匹配
-      if (armors_msg->armors.size() == 1) {
+      else if (armors_msg->armors.size() == 1) {
         const double obs_yaw = orientationToYaw(armors_msg->armors[0].pose.orientation);
         
         // 直接寻找最小角度差索引
@@ -272,8 +375,21 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
         }
     };
 
+    if (tracking_outpost_) {
+        if (use_cv_model_) {
+            cv_model::MeasureOutpost measure_outpost(index);
+            auto R = get_r_with_abs_yaw(z_pyd, abs_yaws);
+            do_predict();
+            do_update(measure_outpost, z_pyd, R);
+        } else {
+            singer_model::MeasureOutpost measure_outpost(index);
+            auto R = get_r_with_abs_yaw(z_pyd, abs_yaws);
+            do_predict();
+            do_update(measure_outpost, z_pyd, R);
+        }
+    }
     //根据匹配到的装甲板的数量选择不同的观测方程
-    switch (index.size())
+    else switch (index.size())
     {
     case 2: {
         if (use_cv_model_) {
@@ -311,17 +427,27 @@ Eigen::VectorXd ArmorFilter::update(const auto_aim_interfaces::msg::Armors::Shar
         x = ukf.getState();
     }
 
-    // 状态约束: r1, r2, dz clamp
+    // 状态约束: standard 使用 [r1,r2,dz]；outpost 兼容映射为 [radius,dz1,dz2]。
     if (use_cv_model_) {
-        // cv_model: r1 at index 8, r2 at index 9, dz at index 10
-        x[8] = std::clamp(x[8], 0.15, 0.4);   // r1
-        x[9] = std::clamp(x[9], 0.15, 0.4);   // r2
-        x[10] = std::clamp(x[10], -0.1, 0.1); // dz
+        if (tracking_outpost_) {
+            x[8] = outpost_radius_;
+            x[9] = std::clamp(x[9], -0.4, 0.4);
+            x[10] = std::clamp(x[10], -0.4, 0.4);
+        } else {
+            x[8] = std::clamp(x[8], 0.15, 0.4);
+            x[9] = std::clamp(x[9], 0.15, 0.4);
+            x[10] = std::clamp(x[10], -0.1, 0.1);
+        }
     } else {
-        // singer_model: r1 at index 12, r2 at index 13, dz at index 14
-        x[12] = std::clamp(x[12], 0.15, 0.4);  // r1
-        x[13] = std::clamp(x[13], 0.15, 0.4);  // r2
-        x[14] = std::clamp(x[14], -0.1, 0.1);  // dz
+        if (tracking_outpost_) {
+            x[12] = outpost_radius_;
+            x[13] = std::clamp(x[13], -0.4, 0.4);
+            x[14] = std::clamp(x[14], -0.4, 0.4);
+        } else {
+            x[12] = std::clamp(x[12], 0.15, 0.4);
+            x[13] = std::clamp(x[13], 0.15, 0.4);
+            x[14] = std::clamp(x[14], -0.1, 0.1);
+        }
     }
     // 将约束后的状态设置回滤波器
     if (use_ekf_) {
@@ -361,9 +487,21 @@ double ArmorFilter::orientationToYaw(const geometry_msgs::msg::Quaternion & q)
 
 Eigen::MatrixXd ArmorFilter::get_q(double dt_){
     if (use_cv_model_) {
-        return cv_model::predict_q(dt_, s2qxy_cv_, s2qz_cv_, s2qyaw_cv_, s2qr_cv_, s2qdz_cv_);
+        return tracking_outpost_
+            ? cv_model::predict_outpost_q(
+                dt_, outpost_s2qxy_cv_, outpost_s2qz_cv_,
+                outpost_s2qyaw_cv_, outpost_s2qr_cv_, outpost_s2qdz_cv_)
+            : cv_model::predict_q(
+                dt_, s2qxy_cv_, s2qz_cv_, s2qyaw_cv_, s2qr_cv_, s2qdz_cv_);
     } else {
-        return singer_model::predict_q(dt_, s2qxy_singer_, s2qz_singer_, s2qyaw_singer_, s2qr_singer_, s2qdz_singer_, tau_singer_);
+        return tracking_outpost_
+            ? singer_model::predict_outpost_q(
+                dt_, outpost_s2qxy_singer_, outpost_s2qz_singer_,
+                outpost_s2qyaw_singer_, outpost_s2qr_singer_,
+                outpost_s2qdz_singer_, tau_singer_)
+            : singer_model::predict_q(
+                dt_, s2qxy_singer_, s2qz_singer_, s2qyaw_singer_,
+                s2qr_singer_, s2qdz_singer_, tau_singer_);
     }
 };
 
@@ -382,17 +520,23 @@ void ArmorFilter::set_r_for_detector(double r_pose, double r_distance, double r_
 }
 
 Eigen::MatrixXd ArmorFilter::get_r(Eigen::VectorXd & z){
+    const double r_pose = tracking_outpost_ ? outpost_r_pose_ : r_pose_;
+    const double r_distance = tracking_outpost_ ? outpost_r_distance_ : r_distance_;
+    const double r_yaw = tracking_outpost_ ? outpost_r_yaw_ : r_yaw_;
     if (use_cv_model_) {
-        return cv_model::measure_r(z, r_pose_, r_distance_, r_yaw_, {}, use_fixed_r_);
+        return cv_model::measure_r(z, r_pose, r_distance, r_yaw, {}, use_fixed_r_);
     } else {
-        return singer_model::measure_r(z, r_pose_, r_distance_, r_yaw_, {}, use_fixed_r_);
+        return singer_model::measure_r(z, r_pose, r_distance, r_yaw, {}, use_fixed_r_);
     }
 };
 
 Eigen::MatrixXd ArmorFilter::get_r_with_abs_yaw(Eigen::VectorXd & z, std::vector<double> & abs_yaws){
+    const double r_pose = tracking_outpost_ ? outpost_r_pose_ : r_pose_;
+    const double r_distance = tracking_outpost_ ? outpost_r_distance_ : r_distance_;
+    const double r_yaw = tracking_outpost_ ? outpost_r_yaw_ : r_yaw_;
     if (use_cv_model_) {
-        return cv_model::measure_r(z, r_pose_, r_distance_, r_yaw_, abs_yaws, use_fixed_r_);
+        return cv_model::measure_r(z, r_pose, r_distance, r_yaw, abs_yaws, use_fixed_r_);
     } else {
-        return singer_model::measure_r(z, r_pose_, r_distance_, r_yaw_, abs_yaws, use_fixed_r_);
+        return singer_model::measure_r(z, r_pose, r_distance, r_yaw, abs_yaws, use_fixed_r_);
     }
 };

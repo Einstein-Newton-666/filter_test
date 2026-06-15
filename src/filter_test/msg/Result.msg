@@ -6,6 +6,7 @@ float64 v_yaw
 float64 radius_1
 float64 radius_2
 float64 dz
+float64 dz2
 float64 position_x_diff
 float64 position_y_diff
 float64 position_z1_diff

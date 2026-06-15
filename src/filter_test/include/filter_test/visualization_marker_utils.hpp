@@ -6,9 +6,10 @@
 
 namespace filter_test {
 
-inline tf2::Quaternion observedArmorMarkerQuaternion(double yaw) {
+inline tf2::Quaternion observedArmorMarkerQuaternion(double yaw, bool is_outpost = false) {
     tf2::Quaternion q;
-    q.setRPY(0.0, 15.0 * M_PI / 180.0, yaw);
+    const double pitch = is_outpost ? -0.26 : 15.0 * M_PI / 180.0;
+    q.setRPY(0.0, pitch, yaw);
     return q;
 }
 

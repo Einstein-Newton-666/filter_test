@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>filter_test 当前架构与计算原理</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2128;
+    --line: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --head: #f0f6fc;
+    --blue: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #a371f7;
+    --cyan: #39c5cf;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto;
+    max-width: 1160px;
+    padding: 36px 20px 56px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+    line-height: 1.62;
+  }
+  h1, h2, h3 { color: var(--head); line-height: 1.3; }
+  h1 { margin: 0 0 10px; font-size: 2rem; }
+  h2 {
+    margin: 38px 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+    font-size: 1.35rem;
+  }
+  h3 { margin: 24px 0 8px; font-size: 1.05rem; color: #79c0ff; }
+  p { margin: 8px 0; }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--panel2);
+    color: #f0c060;
+    font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+    font-size: .9em;
+  }
+  pre {
+    margin: 12px 0;
+    padding: 14px 16px;
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel2);
+    line-height: 1.5;
+    font-size: .88rem;
+  }
+  pre code { padding: 0; background: none; color: var(--text); }
+  table {
+    width: 100%;
+    margin: 14px 0;
+    border-collapse: collapse;
+    font-size: .92rem;
+  }
+  th, td {
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th { background: var(--panel2); color: var(--head); text-align: left; }
+  td { background: var(--panel); }
+  ul { margin: 8px 0 8px 22px; padding: 0; }
+  li { margin: 3px 0; }
+  .lead { color: var(--muted); max-width: 860px; font-size: 1.02rem; }
+  .nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 20px 0 24px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  .nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 5px 11px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    background: var(--bg);
+    font-size: .9rem;
+  }
+  .nav a.active { border-color: var(--blue); color: #79c0ff; background: #14243a; }
+  .note, .warn {
+    margin: 16px 0;
+    padding: 12px 15px;
+    border-left: 3px solid var(--blue);
+    border-radius: 0 8px 8px 0;
+    background: #111d2e;
+  }
+  .warn { border-left-color: var(--orange); background: #211a0d; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 12px;
+    margin: 14px 0;
+  }
+  .card {
+    padding: 13px 15px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  .card strong { display: block; color: var(--head); margin-bottom: 3px; }
+  .card small { color: var(--muted); }
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px;
+    margin: 14px 0;
+  }
+  .step {
+    position: relative;
+    padding: 11px 13px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    min-height: 76px;
+  }
+  .step b { display: block; color: var(--head); }
+  .step span { color: var(--muted); font-size: .88rem; }
+  .step.blue { border-color: var(--blue); }
+  .step.green { border-color: var(--green); }
+  .step.orange { border-color: var(--orange); }
+  .step.purple { border-color: var(--purple); }
+  .tag {
+    display: inline-block;
+    margin: 2px 5px 2px 0;
+    padding: 1px 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: .8rem;
+  }
+  .formula {
+    display: grid;
+    grid-template-columns: minmax(170px, 260px) 1fr;
+    gap: 0;
+    margin: 10px 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .formula .name {
+    padding: 10px 12px;
+    background: #14243a;
+    color: #79c0ff;
+    font-weight: 600;
+  }
+  .formula .body {
+    padding: 10px 12px;
+    background: var(--panel);
+  }
+  .ok { color: #7ee787; }
+  .todo { color: #f0c060; }
+  @media (max-width: 720px) {
+    body { padding: 26px 14px 42px; }
+    h1 { font-size: 1.65rem; }
+    .formula { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>filter_test 当前架构与计算原理</h1>
+<p class="lead">
+  这页只描述当前代码正在做什么。重点是两件事：仿真器如何从真实几何生成 detector 风格观测，
+  typed GTSAM 图优化如何把像素观测、运动模型和车辆/风车几何放进同一张图。
+</p>
+
+<nav class="nav">
+  <a class="active" href="current_project_architecture.html">当前架构</a>
+  <a href="graph_optimizer_architecture.html">图优化架构</a>
+  <a href="factor_graph_optimization.html">因子图原理</a>
+  <a href="gtsam_graph_optimizer_guide.html">GTSAM 指南</a>
+  <a href="ros2_recent_releases.html">ROS2 版本参考</a>
+</nav>
+
+<div class="note">
+  <strong>边界先说清楚：</strong>
+  装甲板图优化是当前主链路；前哨站已有三装甲板仿真、传统滤波观测模型和 typed graph 三槽位分支；
+  能量机关图优化已经有
+  <code>center/roll/vroll/normal_yaw</code> 图模型，并把图优化后的连续 roll 序列送入大符 Ceres 曲线拟合器。
+</div>
+
+<h2>1. 总链路</h2>
+
+<div class="grid">
+  <div class="card">
+    <strong>装甲板</strong>
+    <small><code>armor_simulation_node</code> 生成带噪 PnP 观测，<code>graph_optimizer_test</code> 做 typed GTSAM 优化。</small>
+  </div>
+  <div class="card">
+    <strong>能量机关</strong>
+    <small><code>rune_simulation_node</code> 发布不带物理编号的紧凑五点观测，<code>rune_graph_optimizer</code> 内部匹配 slot 并优化 roll 状态。</small>
+  </div>
+  <div class="card">
+    <strong>相机外参</strong>
+    <small><code>gimbal_simulation</code> 发布 TF；仿真器和图优化器运行时查 <code>odom -> camera_optical_frame</code>。</small>
+  </div>
+  <div class="card">
+    <strong>通用图 core</strong>
+    <small><code>auto_graph::GraphOptimizer</code> 只管理 typed 变量、key、因子和 GTSAM 生命周期，不放 ROS 业务逻辑。</small>
+  </div>
+</div>
+
+<h3>装甲板链路</h3>
+<div class="flow">
+  <div class="step blue"><b>仿真真值</b><span>目标运动、standard/outpost 几何</span></div>
+  <div class="step blue"><b>视觉观测</b><span>投影、像素噪声、IPPE PnP</span></div>
+  <div class="step green"><b>图优化</b><span>像素因子 + edge 因子 + 几何/运动因子</span></div>
+  <div class="step purple"><b>输出</b><span><code>/tracker/target</code> 和 marker</span></div>
+</div>
+
+<h3>能量机关链路</h3>
+<div class="flow">
+  <div class="step blue"><b>roll 运动</b><span>small 固定角速度，big 随机曲线</span></div>
+  <div class="step blue"><b>紧凑观测</b><span>只发布 active blade 五点，不带物理编号</span></div>
+  <div class="step green"><b>RuneCvGraph</b><span>优化 <code>center/roll/vroll/normal_yaw</code></span></div>
+  <div class="step purple"><b>输出</b><span><code>RuneInfo</code>、<code>TargetPose</code>、marker</span></div>
+</div>
+
+<h2>2. 仿真器计算原理</h2>
+
+<p>
+  仿真器不直接给 3D pose 加噪声。它先用真实 3D 几何投影出像素点，再给像素点加噪声，
+  最后用 PnP 反解出 detector 风格的观测。这样误差传播更接近真实视觉链路。
+</p>
+
+<div class="formula">
+  <div class="name">运动积分</div>
+  <div class="body">
+    <pre><code>x   = x   + vx   * dt + 0.5 * ax   * dt^2
+y   = y   + vy   * dt + 0.5 * ay   * dt^2
+yaw = yaw + vyaw * dt + 0.5 * ayaw * dt^2
+
+vx   = vx   + ax   * dt
+vy   = vy   + ay   * dt
+vyaw = vyaw + ayaw * dt</code></pre>
+    <p>过程噪声按 <code>a_eff = a + sqrt(q / dt) * N(0,1)</code> 注入。</p>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">标准装甲板位置</div>
+  <div class="body">
+    <pre><code>armor_yaw_i = yaw + i * pi/2
+r_i         = (i % 2 == 0) ? r1 : r2
+z_i         = (i % 2 == 0) ? z1 : z2
+
+position_i = [
+  x - cos(armor_yaw_i) * r_i,
+  y - sin(armor_yaw_i) * r_i,
+  z_i
+]</code></pre>
+    <p>局部角点顺序固定为 <code>[左下, 左上, 右上, 右下]</code>，局部坐标为 <code>X=法线, Y=宽度, Z=高度</code>。</p>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">前哨站三装甲板</div>
+  <div class="body">
+    <pre><code>armor_yaw_i = yaw + i * 2*pi/3
+local_i = [
+  -radius * cos(armor_yaw_i),
+  -radius * sin(armor_yaw_i),
+  dz_i
+]
+
+position_i = center + body_rotation * local_i
+R_i = body_rotation * Rz(armor_yaw_i) * Ry(outpost.armor_pitch)</code></pre>
+    <p><code>dz_i = [0, dz_1, dz_2]</code>。图优化侧使用同样的 3 槽位/120 度模型，仿真器通过 <code>Armor.priority</code> 传递物理 index。</p>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">相机投影</div>
+  <div class="body">
+    <pre><code>p_cam = T_camera_odom * p_odom
+x_n = X_cam / Z_cam
+y_n = Y_cam / Z_cam
+
+r2 = x_n^2 + y_n^2
+radial = 1 + k1*r2 + k2*r2^2
+
+u = fx * x_distorted + cx
+v = fy * y_distorted + cy</code></pre>
+    <p>畸变模型是 Brown-Conrady：径向 <code>k1/k2</code> 加切向 <code>p1/p2</code>。</p>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">像素噪声</div>
+  <div class="body">
+    <pre><code>sigma(d) = sigma_min + k * (d - d_opt)^2
+
+p_i' = p_i + n_common + n_i
+n_common ~ N(0, (rho*sigma)^2)
+n_i      ~ N(0, (sqrt(1-rho^2)*sigma)^2)</code></pre>
+    <p>
+      <code>rho</code> 越大，角点越像一起平移，局部矩形形状破坏越小；单点总方差仍保持 <code>sigma^2</code>。
+    </p>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">掉检概率</div>
+  <div class="body">
+    <pre><code>area_factor = sigmoid(k_area * (area - min_area))
+dist_factor = sigmoid(k_dist * (max_distance - distance))
+detect_prob = detection_probability * area_factor * dist_factor</code></pre>
+    <p>距离太远、面积太小或随机 miss 都会导致该目标不发布。</p>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">PnP 观测</div>
+  <div class="body">
+    <pre><code>noisy_pixels + armor_3d_model
+  -> cv::solvePnP(..., SOLVEPNP_IPPE)
+  -> R_cam_armor, t_cam_armor
+  -> 转回 odom
+  -> /detector/armors</code></pre>
+    <p>平面 IPPE 仍可能有双解，仿真侧用 yaw 先验做分支修正。</p>
+  </div>
+</div>
+
+<h2>3. 能量机关仿真原理</h2>
+
+<p>
+  能量机关以叶片局部五点为模型，不移植 detector。仿真节点每帧计算真实 5 片叶片，
+  但检测话题只发布当前 active 且通过可见性/掉检判断的叶片；物理 slot 只保留在
+  ground truth 和 marker 中，图优化内部通过 PnP roll/center 匹配推断。
+</p>
+
+<pre><code>r_center = (0,  0.000, 0.0000)
+near     = (0,  0.000, 0.5415)
+left     = (0,  0.160, 0.8585)
+far      = (0,  0.000, 0.7000)
+right    = (0, -0.160, 0.8585)</code></pre>
+
+<div class="formula">
+  <div class="name">叶片世界坐标</div>
+  <div class="body">
+    <pre><code>R_base = Rz(normal_yaw) * Ry(normal_pitch)
+R      = R_base * Rx(roll)
+
+point_world = center + R * point_local</code></pre>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">小符</div>
+  <div class="body">
+    <pre><code>roll = roll + angular_velocity * dt</code></pre>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">观测与可视化</div>
+  <div class="body">
+    <pre><code>small: active_blades = 1 random blade
+big:   active_blades = 2 random blades
+switch interval = 3s
+
+/rune_detector/rune_targets: compact observed active blades
+/rune_simulation/ground_truth: center x/y/z + normal_yaw/normal_pitch + roll/vroll + mode + active_blades
+/rune_simulation/marker:
+  rune_center     center sphere
+  rune_target     target sphere
+  rune            5 fitted blade spheres + radius lines
+  observed_position observed blade spheres
+  rune_status     roll/obs text
+
+RuneInfo: normal_yaw/normal_pitch + roll/vroll/curve params
+TargetPose.orientation: RPY(0, normal_pitch, normal_yaw)</code></pre>
+  </div>
+</div>
+
+<div class="formula">
+  <div class="name">大符</div>
+  <div class="body">
+    <pre><code>v(t) = dir * abs(bias + amplitude * sin(frequency*t + phase) + noise)
+roll = roll + v(t) * dt</code></pre>
+    <p>图优化节点先用常速 roll 图平滑单帧观测，再把连续 roll 序列喂给 5 参数大符曲线。</p>
+  </div>
+</div>
+
+<h2>4. 外参和 TF</h2>
+
+<p>
+  当前项目没有使用 auto_aim 的 xacro/URDF 外参配置文件。相机外参由
+  <code>gimbal_simulation</code> 直接广播。
+</p>
+
+<pre><code>odom
+  -> gimbal_link              # 动态 yaw/pitch
+  -> camera_link              # camera_gimbal_tx/ty/tz
+  -> camera_optical_frame     # 固定 RPY = -pi/2, 0, -pi/2</code></pre>
+
+<p>仿真器查到的 TF 是：</p>
+
+<pre><code>lookupTransform("odom", "camera_optical_frame")
+
+p_odom = R_c2o * p_cam + t_c2o</code></pre>
+
+<p>投影需要反方向，所以代码中转换为：</p>
+
+<pre><code>R_o2c = R_c2o^T
+t_o2c = -R_c2o^T * t_c2o
+p_cam = R_o2c * p_odom + t_o2c</code></pre>
+
+<h2>5. 装甲板图优化原理</h2>
+
+<p>
+  图优化不是直接拟合单帧 PnP pose。每块匹配装甲板引入一个辅助 <code>Pose3</code>，
+  像素误差约束辅助 pose，车辆几何误差再把辅助 pose 拉回整车状态。
+</p>
+
+<h3>状态变量</h3>
+<table>
+  <tr><th>变量</th><th>类型</th><th>动态</th><th>含义</th></tr>
+  <tr><td><code>center</code></td><td><code>Point3</code></td><td>是</td><td>目标中心位置</td></tr>
+  <tr><td><code>velocity</code></td><td><code>Vector3</code></td><td>是</td><td>中心速度</td></tr>
+  <tr><td><code>yaw</code></td><td><code>Rot2</code></td><td>是</td><td>目标朝向</td></tr>
+  <tr><td><code>vyaw</code></td><td><code>double</code></td><td>是</td><td>yaw 角速度</td></tr>
+  <tr><td><code>radius_a/radius_b</code></td><td><code>double</code></td><td>否</td><td>奇偶装甲板半径，无界 logistic 状态</td></tr>
+  <tr><td><code>dz</code></td><td><code>double</code></td><td>否</td><td>奇偶装甲板高度差</td></tr>
+</table>
+
+<h3>因子拆分</h3>
+<table>
+  <tr><th>因子</th><th>残差含义</th><th>为什么需要</th></tr>
+  <tr>
+    <td><code>TranslationFactor</code></td>
+    <td><code>center_k - center_{k-1} - velocity_{k-1} * dt</code></td>
+    <td>常速平移模型。</td>
+  </tr>
+  <tr>
+    <td><code>YawFactor</code></td>
+    <td><code>yaw_k = yaw_{k-1} + vyaw_{k-1} * dt</code></td>
+    <td>用 <code>Rot2</code> 处理角度跨 <code>+-pi</code>。</td>
+  </tr>
+  <tr>
+    <td><code>ArmorTypedReprojFactor</code></td>
+    <td>辅助 <code>Pose3</code> 投影角点到像素，与观测像素相减。</td>
+    <td>把真实 detector 误差放在像素层，避免只相信 PnP pose。</td>
+  </tr>
+  <tr>
+    <td><code>ArmorRadiusCenterZFactor</code> / <code>ArmorRadiusDZFactor</code></td>
+    <td>辅助 pose 的 odom 位置/yaw 与整车中心、半径、高度差一致。</td>
+    <td>把单块装甲板观测融合成整车状态。</td>
+  </tr>
+  <tr>
+    <td><code>ArmorEdgeCenterZReprojFactor</code> / <code>ArmorEdgeDZReprojFactor</code></td>
+    <td>从 <code>center/yaw/radius/dz</code> 直接预测四角点，对四条边计算 auto_aim 风格重投影残差。</td>
+    <td>让主状态直接看到 2D 边缘几何，补强 yaw、半径和中心位置约束。</td>
+  </tr>
+</table>
+
+<p>
+  direct edge 残差不替代角点像素因子。它参考 auto_aim <code>EdgeLoss</code>：
+  每条边先算投影边和观测边的顶点位移、边长差和方向角差，再按装甲板相对相机的倾斜角混合。
+</p>
+
+<pre><code>pixel_error = (0.5*(|p_i-o_i| + |p_j-o_j|) + |len_proj-len_obs|) / len_obs
+angular_error = atan2(cross(edge_proj, edge_obs), dot(edge_proj, edge_obs))
+cost = pixel_error^2 * |sin(inclined)| + angular_error^2 * |cos(inclined)| * edge_loss_slope_k
+residual_edge = cost^(1/4)</code></pre>
+
+<p>
+  偶数装甲板 direct factor 连接 <code>radius_a/yaw/center</code>；
+  奇数装甲板多连接 <code>dz</code>。调参入口是
+  <code>use_edge_reproj_factor</code>、<code>edge_reproj_sigma</code> 和
+  <code>edge_loss_slope_k</code>。
+</p>
+
+<p>匹配代价当前是：</p>
+
+<pre><code>cost = yaw_diff + 3 * position_error</code></pre>
+
+<p>单帧内匹配保证装甲板 index 唯一；未匹配观测标记为 <code>-1</code> 并跳过写图。</p>
+
+<h2>6. 能量机关图优化原理</h2>
+
+<p>
+  <code>RuneCvGraph</code> 复用同一个 <code>auto_graph::GraphOptimizer</code> core。
+  它的图比装甲板小：中心、roll、roll 速度和一个静态平面法线 yaw。
+</p>
+
+<table>
+  <tr><th>变量</th><th>类型</th><th>动态</th><th>含义</th></tr>
+  <tr><td><code>center</code></td><td><code>Point3</code></td><td>是</td><td>能量机关中心</td></tr>
+  <tr><td><code>roll</code></td><td><code>Rot2</code></td><td>是</td><td>当前叶片角度</td></tr>
+  <tr><td><code>vroll</code></td><td><code>double</code></td><td>是</td><td>roll 角速度</td></tr>
+  <tr><td><code>normal_yaw</code></td><td><code>Rot2</code></td><td>否</td><td>风车平面法线 yaw</td></tr>
+</table>
+
+<table>
+  <tr><th>因子</th><th>残差含义</th></tr>
+  <tr>
+    <td><code>RuneRollFactor</code></td>
+    <td><code>roll_k = roll_{k-1} + vroll_{k-1} * dt</code></td>
+  </tr>
+  <tr>
+    <td><code>RuneVrollFactor</code></td>
+    <td><code>vroll_k - vroll_{k-1}</code>，随机游走。</td>
+  </tr>
+  <tr>
+    <td><code>RuneBladeReprojFactor</code></td>
+    <td>辅助叶片 <code>Pose3</code> 将五个局部点投影到像素，与匹配到该内部 slot 的五点观测相减。</td>
+  </tr>
+  <tr>
+    <td><code>RuneBladeGeometryFactor</code></td>
+    <td>辅助叶片 pose 与 <code>center/roll/normal_yaw</code> 的位置、roll 和 yaw 一致。</td>
+  </tr>
+  <tr>
+    <td><code>RuneBladeDirectReprojFactor</code></td>
+    <td>直接连接 <code>center/roll/normal_yaw</code>，用四个扇叶点的两条对角线角度差和归一化长度差做残差。</td>
+  </tr>
+</table>
+
+<p>发布预测时优先使用大符曲线；拟合数据不足时退回常速外推：</p>
+
+<pre><code>angle(t) = -a*cos(w*(t+t0)) + b*t + c
+predicted_roll = curve_ready ? angle(t + predict_dt)
+                             : optimized_roll + vroll * predict_dt</code></pre>
+
+<h2>7. 文件地图</h2>
+
+<table>
+  <tr><th>主题</th><th>文件</th></tr>
+  <tr><td>装甲板/前哨站仿真节点</td><td><code>src/armor_simulation/src/armor_simulation.cpp</code></td></tr>
+  <tr><td>能量机关仿真节点</td><td><code>src/armor_simulation/src/rune_simulation.cpp</code></td></tr>
+  <tr><td>云台和 TF</td><td><code>src/armor_simulation/src/gimbal_simulation.cpp</code></td></tr>
+  <tr><td>几何 helper</td><td><code>armor_geometry.hpp</code>、<code>rune_geometry.hpp</code></td></tr>
+  <tr><td>相机/PnP</td><td><code>camera_model.hpp</code></td></tr>
+  <tr><td>噪声/掉检</td><td><code>detection_noise.hpp</code></td></tr>
+  <tr><td>装甲板图模型</td><td><code>graph_optimizer/armor_model.hpp/.cpp</code></td></tr>
+  <tr><td>能量机关图模型</td><td><code>graph_optimizer/rune_model.hpp/.cpp</code></td></tr>
+  <tr><td>通用 typed graph core</td><td><code>graph_optimizer/graph_core.hpp/.cpp</code></td></tr>
+</table>
+
+<h2>8. 构建和验证</h2>
+
+<pre><code>CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1 \
+  --packages-select auto_aim_interfaces armor_simulation filter_test \
+  --cmake-args -DBUILD_TESTING=ON
+
+LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH colcon test \
+  --packages-select armor_simulation \
+  --ctest-args -R test_noise_model --output-on-failure
+
+LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH colcon test \
+  --packages-select filter_test \
+  --ctest-args -R test_auto_graph_optimizer --output-on-failure</code></pre>
+
+<div class="warn">
+  <strong>测试解释：</strong>
+  <code>test_noise_model</code> 覆盖像素噪声、PnP 修正、rune 几何和前哨站布局。
+  <code>test_auto_graph_optimizer</code> 覆盖 typed graph core、装甲板图优化和 rune 基础因子。
+  完整 lint 当前仍可能受既有 package metadata/格式问题影响。
+</div>
+
+</body>
+</html>

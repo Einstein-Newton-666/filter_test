@@ -12,11 +12,19 @@ ament_auto_find_build_dependencies()
 # 自定义消息
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GroundTruth.msg"
+  "msg/RuneGroundTruth.msg"
   DEPENDENCIES std_msgs
 )
 
+set(SIMULATION_COMMON_SOURCES
+  src/simulation_common.cpp
+)
+
 # 仿真器节点 (合并: 运动 + 相机投影 + 噪声 + PnP)
-ament_auto_add_executable(armor_simulation_node src/armor_simulation.cpp)
+ament_auto_add_executable(armor_simulation_node
+  src/armor_simulation.cpp
+  ${SIMULATION_COMMON_SOURCES}
+)
 target_include_directories(armor_simulation_node PUBLIC
   ${EIGEN3_INCLUDE_DIR}
   ${OpenCV_INCLUDE_DIRS}
@@ -24,6 +32,21 @@ target_include_directories(armor_simulation_node PUBLIC
 )
 rosidl_get_typesupport_target(ts_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(armor_simulation_node
+  ${OpenCV_LIBS}
+  ${ts_target}
+)
+
+# 能量机关仿真节点 (5 点 RuneTargets + 真值调试信息)
+ament_auto_add_executable(rune_simulation_node
+  src/rune_simulation.cpp
+  ${SIMULATION_COMMON_SOURCES}
+)
+target_include_directories(rune_simulation_node PUBLIC
+  ${EIGEN3_INCLUDE_DIR}
+  ${OpenCV_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+)
+target_link_libraries(rune_simulation_node
   ${OpenCV_LIBS}
   ${ts_target}
 )
@@ -43,6 +66,7 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_auto_add_gtest(test_noise_model
     test/test_noise_model.cpp
+    ${SIMULATION_COMMON_SOURCES}
   )
   target_include_directories(test_noise_model PUBLIC
     ${EIGEN3_INCLUDE_DIR}
@@ -50,7 +74,9 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_noise_model
     ${OpenCV_LIBS}
+    ${ts_target}
   )
+  ament_target_dependencies(test_noise_model auto_aim_interfaces)
   ament_lint_auto_find_test_dependencies()
 endif()
 

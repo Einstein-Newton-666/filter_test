@@ -1,0 +1,14 @@
+std_msgs/Header header
+string mode
+bool tracking
+int32 observed_count
+float64 normal_yaw
+float64 normal_pitch
+float64 optimized_roll
+float64 predicted_roll
+float64 angular_velocity
+float64 curve_bias
+float64 curve_amplitude
+float64 curve_frequency
+float64 curve_phase
+geometry_msgs/Point target_position

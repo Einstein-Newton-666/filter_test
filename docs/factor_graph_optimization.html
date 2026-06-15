@@ -98,12 +98,17 @@
 <body>
 
 <h1>📐 因子图优化的原理</h1>
-<p style="color:var(--muted)">从非线性最小二乘 → Gauss-Newton → iSAM2 增量优化<br>结合 <code>graph_optimizer_test</code> 的装甲板跟踪实例</p>
+<p style="color:var(--muted)">
+  这页讲数学背景：非线性最小二乘、残差、雅可比、Gauss-Newton、Bayes Tree 和 iSAM2。
+  想看当前代码怎么组织，先看“当前架构”和“图优化架构”。
+</p>
 
 <nav class="doc-nav">
-  <a class="doc-link" href="graph_optimizer_architecture.html">当前架构</a>
+  <a class="doc-link" href="current_project_architecture.html">当前架构</a>
+  <a class="doc-link" href="graph_optimizer_architecture.html">图优化架构</a>
   <a class="doc-link active" href="factor_graph_optimization.html">因子图原理</a>
   <a class="doc-link" href="gtsam_graph_optimizer_guide.html">GTSAM 使用指南</a>
+  <a class="doc-link" href="ros2_recent_releases.html">ROS2 版本参考</a>
 </nav>
 
 <!-- ═══════════════════════════════════════════ -->
@@ -474,6 +479,7 @@ if 新因子只连当前帧变量:
 │   │   │ 4× ArmorReprojFactor       Pose3 → 2D 像素   │
 │   │   │ 1× ArmorRadiusCenterZFactor (armor 0,2)      │
 │   │   │     或 ArmorRadiusDZFactor   (armor 1,3)     │
+│   │   │ 1× ArmorEdge*ReprojFactor   主状态 → 四边残差 │
 │   │   │ 几何误差: 切向(≈0) + 径向(=r) + z + yaw_err  │
 │   │   └──────────────────────────────────────────────┘
 │   │
@@ -521,6 +527,8 @@ if 新因子只连当前帧变量:
 <tr><td>ArmorReprojFactor</td><td>1</td><td>2D</td><td>1.0px</td><td>投影角点→像素, 每装甲板×4</td></tr>
 <tr><td>ArmorRadiusCenterZFactor</td><td>4</td><td>4D</td><td>[0.01,0.03,0.01,0.005]</td><td>armor 0,2: 切向+径向+z+yaw</td></tr>
 <tr><td>ArmorRadiusDZFactor</td><td>5</td><td>4D</td><td>[0.01,0.03,0.01,0.005]</td><td>armor 1,3: 切向+径向+z(dz)+yaw</td></tr>
+<tr><td>ArmorEdgeCenterZReprojFactor</td><td>3</td><td>4D</td><td>edge_reproj_sigma</td><td>armor 0,2: auto_aim EdgeLoss 风格四边重投影</td></tr>
+<tr><td>ArmorEdgeDZReprojFactor</td><td>4</td><td>4D</td><td>edge_reproj_sigma</td><td>armor 1,3: 多连接 dz 的四边重投影</td></tr>
 </table>
 
 <!-- ═══════════════════════════════════════════ -->

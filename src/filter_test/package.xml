@@ -22,6 +22,9 @@
   <depend>std_msgs</depend>
   <depend>angles</depend>
   <depend>visualization_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>camera_info_manager</depend>
+  <depend>armor_simulation</depend>
   <depend>gtsam</depend>
 
 

@@ -1,6 +1,7 @@
 // jlu tracker adapter — converts ROS2 Armor messages to jlu::RobotTarget
 #include "filter_test/jlu_tracker/target.hpp"
 #include "filter_test/jlu_tracker/configs.hpp"
+#include "filter_test/camera_info_utils.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
 
 #include <rclcpp/rclcpp.hpp>
@@ -33,16 +34,11 @@ class JluTrackerNode : public rclcpp::Node {
     config_.cold_start_frames = config.first_update_batch_size;
 
     // Camera
-    double fx = declare_parameter("camera_fx", 2411.0);
-    double fy = declare_parameter("camera_fy", 2411.0);
-    double cx = declare_parameter("camera_cx", 720.0);
-    double cy = declare_parameter("camera_cy", 640.0);
-    double k1 = declare_parameter("distortion_k1", -0.093);
-    double k2 = declare_parameter("distortion_k2", 0.154);
-    double p1 = declare_parameter("distortion_p1", 0.0001);
-    double p2 = declare_parameter("distortion_p2", -0.0006);
-    camera_matrix_ = (cv::Mat_<double>(3, 3) << fx, 0, cx, 0, fy, cy, 0, 0, 1);
-    distortion_ = (cv::Mat_<double>(1, 4) << k1, k2, p1, p2);
+    // jlu::RobotTarget 接口沿用 cv::Mat K/D；读取仍统一走 CameraInfo，
+    // 不再维护一套独立的手写 fx/fy/cx/cy 参数。
+    auto calibration = loadCameraCalibrationFromInfo(*this);
+    camera_matrix_ = calibration.cv_camera_matrix;
+    distortion_ = calibration.cv_distortion;
 
     // TF2
     tf2_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
@@ -234,7 +230,8 @@ class JluTrackerNode : public rclcpp::Node {
         am.pose.position.x = obs.pose.position.x;
         am.pose.position.y = obs.pose.position.y;
         am.pose.position.z = obs.pose.position.z;
-        am.pose.orientation = tf2::toMsg(observedArmorMarkerQuaternion(obs.yaw));
+        am.pose.orientation = tf2::toMsg(
+            observedArmorMarkerQuaternion(obs.yaw, obs.number == "outpost"));
         am.scale.x = 0.005; am.scale.y = 0.135; am.scale.z = 0.125;
         am.color.a = 1.0; am.color.r = 1.0; am.color.g = 0.0; am.color.b = 0.0;
         markers->markers.push_back(am);

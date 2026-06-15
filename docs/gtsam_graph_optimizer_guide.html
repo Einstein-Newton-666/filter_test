@@ -144,15 +144,16 @@
 
 <h1>GTSAM 图优化结构与使用指南</h1>
 <p style="color:var(--muted)">
-  从最大后验估计、因子图和稀疏求解开始，讲到 <code>gtsam::ISAM2</code>、
-  <code>FixedLagSmoother</code>、自定义 factor，以及本项目
-  <code>ArmorCvPixelGraph</code> / <code>GraphModelRunner&lt;ArmorCvPixelProblem&gt;</code> 的实际接法。
+  这页讲 GTSAM 的使用方式：key、Values、factor、noise model、iSAM2、fixed-lag smoother 和自定义 factor。
+  当前项目已经把这些封装进 <code>auto_graph::GraphOptimizer</code>，业务代码通常不直接操作裸 GTSAM API。
 </p>
 
 <nav class="doc-nav">
-  <a class="doc-link" href="graph_optimizer_architecture.html">当前架构</a>
+  <a class="doc-link" href="current_project_architecture.html">当前架构</a>
+  <a class="doc-link" href="graph_optimizer_architecture.html">图优化架构</a>
   <a class="doc-link" href="factor_graph_optimization.html">因子图原理</a>
   <a class="doc-link active" href="gtsam_graph_optimizer_guide.html">GTSAM 使用指南</a>
+  <a class="doc-link" href="ros2_recent_releases.html">ROS2 版本参考</a>
 </nav>
 
 <h2>1. 图优化到底在优化什么</h2>
@@ -477,7 +478,25 @@ public:
   <td>4D: tangential, radial, z, yaw</td>
   <td>奇数装甲板几何约束，比偶数装甲板多连接一个静态 <code>dz</code>。</td>
 </tr>
+<tr>
+  <td><code>ArmorEdgeCenterZReprojFactor</code></td>
+  <td><code>double radius_a_u</code>, <code>Rot2 yaw</code>, <code>Point3 center</code></td>
+  <td>4D: 四条边的 auto_aim EdgeLoss 残差</td>
+  <td>偶数装甲板直接从主状态预测四角点，补强 2D 边缘几何约束。</td>
+</tr>
+<tr>
+  <td><code>ArmorEdgeDZReprojFactor</code></td>
+  <td><code>double radius_b_u</code>, <code>double dz</code>, <code>Rot2 yaw</code>, <code>Point3 center</code></td>
+  <td>4D: 四条边的 auto_aim EdgeLoss 残差</td>
+  <td>奇数装甲板 direct edge 约束，比偶数多连接高度差 <code>dz</code>。</td>
+</tr>
 </table>
+
+<p>
+  direct edge 因子不走辅助 <code>Pose3</code>。它把四条边的顶点位移、边长差和边方向角度差压成
+  4 维残差，噪声入口是 <code>edge_reproj_sigma</code>；过强时先增大该值或关闭
+  <code>use_edge_reproj_factor</code> 对比。
+</p>
 
 <h2>7. 本项目的 typed graph 封装</h2>
 
@@ -492,27 +511,25 @@ public:
   <div class="flow-arrow">-&gt;</div>
   <div class="flow-box">ArmorCvPixelGraph</div>
   <div class="flow-arrow">-&gt;</div>
-  <div class="flow-box green">GraphModelRunner&lt;ArmorCvPixelProblem&gt;</div>
-  <div class="flow-arrow">-&gt;</div>
   <div class="flow-box orange">GraphOptimizer</div>
   <div class="flow-arrow">-&gt;</div>
   <div class="flow-box purple">GTSAM</div>
 </div>
 
-<h3>7.1 TypedKeyLayout: 变量契约</h3>
+<h3>7.1 Var&lt;T&gt;: 变量契约</h3>
 
-<pre><code class="language-cpp">auto_graph::TypedKeyLayout result;
-result.addDynamic&lt;gtsam::Point3&gt;("center", 'x')
-      .addDynamic&lt;gtsam::Vector3&gt;("velocity", 'v')
-      .addDynamic&lt;gtsam::Rot2&gt;("yaw", 'r')
-      .addDynamic&lt;double&gt;("vyaw", 'w')
-      .addStatic&lt;double&gt;("radius_a", 'a')
-      .addStatic&lt;double&gt;("radius_b", 'b')
-      .addStatic&lt;double&gt;("dz", 'z');</code></pre>
+<pre><code class="language-cpp">auto_graph::Var&lt;gtsam::Point3&gt; center =
+    optimizer.declareDynamic&lt;gtsam::Point3&gt;("center", 'c');
+auto_graph::Var&lt;gtsam::Vector3&gt; velocity =
+    optimizer.declareDynamic&lt;gtsam::Vector3&gt;("velocity", 'v');
+auto_graph::Var&lt;gtsam::Rot2&gt; yaw =
+    optimizer.declareDynamic&lt;gtsam::Rot2&gt;("yaw", 'r');
+auto_graph::Var&lt;double&gt; radius_a =
+    optimizer.declareStatic&lt;double&gt;("radius_a", 'a');</code></pre>
 
 <table>
 <tr><th>变量名</th><th>prefix</th><th>GTSAM 类型</th><th>动态/静态</th><th>含义</th></tr>
-<tr><td><code>center</code></td><td><code>x</code></td><td><code>gtsam::Point3</code></td><td>动态</td><td>机器人中心位置</td></tr>
+<tr><td><code>center</code></td><td><code>c</code></td><td><code>gtsam::Point3</code></td><td>动态</td><td>机器人中心位置</td></tr>
 <tr><td><code>velocity</code></td><td><code>v</code></td><td><code>gtsam::Vector3</code></td><td>动态</td><td>中心速度</td></tr>
 <tr><td><code>yaw</code></td><td><code>r</code></td><td><code>gtsam::Rot2</code></td><td>动态</td><td>中心 yaw，使用流形变量处理角度跨界</td></tr>
 <tr><td><code>vyaw</code></td><td><code>w</code></td><td><code>double</code></td><td>动态</td><td>中心角速度</td></tr>
@@ -523,23 +540,27 @@ result.addDynamic&lt;gtsam::Point3&gt;("center", 'x')
 
 <div class="note">
   静态变量的 key 固定是 <code>prefix + 0</code>，例如 <code>a0</code>、<code>b0</code>、<code>z0</code>。
-  动态变量使用当前 frame id，例如 <code>x12</code>、<code>r12</code>。
+  动态变量使用当前 frame id，例如 <code>c12</code>、<code>r12</code>。
 </div>
 
 <h3>7.2 每帧执行顺序</h3>
 
-<pre><code class="language-cpp">GraphModelRunner&lt;Model&gt;::update(input):
-  frame = optimizer.beginFrame(input.dt)
-  Model::addFrame(frame, input, variables)
+<pre><code class="language-cpp">ArmorCvPixelGraph::update(msg, dt, T_camera_to_odom):
+  if not initialized:
+    initializeFromFirstObservation()
+
+  optimizer.beginFrame()
+  addMotionFactors(dt)
+  addObservationFactors(msg, T_camera_to_odom)
   solve_result = optimizer.solve()
-  return Model::makeOutput(output_context, input, variables)</code></pre>
+  return makeOutput(solve_result)</code></pre>
 
 <table>
 <tr><th>阶段</th><th>当前实现</th><th>写入 GTSAM 的内容</th></tr>
 <tr>
   <td><code>initialize</code></td>
   <td>第一帧用第一块装甲板反推中心初值，并给 frame 0 主状态加 prior</td>
-  <td><code>Values</code> 插入 <code>x0/v0/r0/w0/a0/b0/z0</code>；<code>graph.addPrior</code> 加初始先验</td>
+  <td><code>Values</code> 插入 <code>c0/v0/r0/w0/a0/b0/z0</code>；<code>addPrior</code> 加初始先验</td>
 </tr>
 <tr>
   <td><code>addMotion</code></td>
@@ -558,36 +579,36 @@ result.addDynamic&lt;gtsam::Point3&gt;("center", 'x')
 </tr>
 <tr>
   <td><code>makeOutput</code></td>
-  <td>优化成功后从 <code>optimizer.estimate&lt;T&gt;</code> 取最新值</td>
+  <td>优化成功后从 <code>optimizer.estimate(var)</code> 取最新值</td>
   <td>更新 runtime state，输出 predicted armors 和匹配结果</td>
 </tr>
 </table>
 
 <h3>7.3 项目风格伪代码</h3>
 
-<pre><code class="language-cpp">void ArmorCvPixelProblem::addFrame(FrameContext&amp; graph,
-                                   const FrameInput&amp; input,
-                                   const Variables&amp; vars) {
-    graph.insert(vars.center, predicted_center);
-    graph.insert(vars.velocity, predicted_velocity);
-    graph.insert(vars.yaw, gtsam::Rot2::fromAngle(predicted_yaw));
-    graph.insert(vars.vyaw, predicted_vyaw);
+<pre><code class="language-cpp">void ArmorCvPixelGraph::addMotionFactors(double dt) {
+    optimizer_.insert(vars_.center, predicted_center);
+    optimizer_.insert(vars_.velocity, predicted_velocity);
+    optimizer_.insert(vars_.yaw, gtsam::Rot2::fromAngle(predicted_yaw));
+    optimizer_.insert(vars_.vyaw, predicted_vyaw);
 
-    const uint64_t k = graph.frameId();
-    graph.addFactor&lt;TranslationFactor&gt;(
+    optimizer_.addFactor&lt;TranslationFactor&gt;(
         translation_noise,
-        graph.key(vars.center, k - 1), graph.key(vars.velocity, k - 1),
-        graph.key(vars.center, k), input.dt);
+        optimizer_.keyPrev(vars_.center), optimizer_.keyPrev(vars_.velocity),
+        optimizer_.key(vars_.center), dt);
+}
 
-    auto akey = armorPoseKey(graph.frameId(), armor_index);
-    graph.insertKey&lt;gtsam::Pose3&gt;(akey, armor_pose_camera);
+void ArmorCvPixelGraph::addObservationFactors(...) {
+    auto akey = armorPoseKey(optimizer_.getFrameId(), armor_index);
+    optimizer_.insertAux(akey, armor_pose_camera);
 
-    graph.addFactor&lt;ArmorTypedReprojFactor&gt;(
+    optimizer_.addFactor&lt;ArmorTypedReprojFactor&gt;(
         pixel_noise, akey, corner_local, K, distortion, observed_pixel);
 
-    graph.addFactor&lt;ArmorRadiusCenterZFactor&gt;(
-        geo_noise, akey, graph.key("radius_a", 0),
-        graph.key("yaw"), graph.key("center"), T_camera_to_odom, armor_index);
+    optimizer_.addFactor&lt;ArmorRadiusCenterZFactor&gt;(
+        geo_noise, akey, optimizer_.key(vars_.radius_a),
+        optimizer_.key(vars_.yaw), optimizer_.key(vars_.center),
+        T_camera_to_odom, armor_index);
 }</code></pre>
 
 <h2>8. 求解器后端和 fixed-lag 细节</h2>
@@ -671,15 +692,15 @@ result.addDynamic&lt;gtsam::Point3&gt;("center", 'x')
 <ol style="margin-left:22px">
   <li><code>graph_optimizer_test.cpp</code>：看 ROS 参数如何进入 <code>TrackerConfig</code>，以及 TF 和 topic 边界。</li>
   <li><code>armor_tracker.hpp/cpp</code>：看空帧、初始化、reset、<code>ArmorCvPixelGraph</code> 调用和输出封装。</li>
-  <li><code>graph_core.hpp/cpp</code>：看 <code>ModelSpec</code>、<code>FrameContext</code>、<code>GraphModelRunner</code>、<code>GraphOptimizer::solve()</code>。</li>
-  <li><code>armor_model.hpp/cpp</code>：看 <code>ArmorCvPixelProblem</code> 如何实现 describe、初始化、单帧因子和输出。</li>
+  <li><code>graph_core.hpp/cpp</code>：看 <code>Var&lt;T&gt;</code>、key 映射、初值/因子暂存和 <code>GraphOptimizer::solve()</code>。</li>
+  <li><code>armor_model.hpp/cpp</code>：看 <code>ArmorCvPixelGraph</code> 如何初始化、预测、匹配、写因子和输出。</li>
   <li>最后看三个自定义观测 factor 的 <code>evaluateError</code> 和雅可比。</li>
 </ol>
 
 <div class="highlight">
   <strong>一句话总结：</strong>GTSAM 提供 key/value/factor/optimizer 的通用机制；
-  本项目用 <code>ModelSpec</code>、<code>FrameContext</code>、<code>GraphModelRunner</code> 和 <code>ArmorCvPixelGraph</code> 把这些机制包装成可复用的跟踪框架；
-  <code>ArmorCvPixelProblem</code> 则把装甲板几何、像素重投影和运动模型落成具体因子图。
+  本项目用 <code>Var&lt;T&gt;</code> 和 <code>auto_graph::GraphOptimizer</code> 把这些机制包装成可复用 core；
+  <code>ArmorCvPixelGraph</code> 和 <code>RuneCvGraph</code> 则把装甲板/能量机关几何、像素重投影和运动模型落成具体因子图。
 </div>
 
 </body>

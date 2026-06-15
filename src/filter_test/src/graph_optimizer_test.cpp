@@ -1,36 +1,67 @@
 #include "filter_test/graph_optimizer_test.hpp"
+#include "filter_test/camera_info_utils.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <sstream>
 
 namespace filter_test {
 namespace {
 
 void declareTrackerParameters(rclcpp::Node& node) {
-    node.declare_parameter("use_2d_observation", false);
-    node.declare_parameter("s2qxy", 0.1);
-    node.declare_parameter("s2qz", 0.1);
-    node.declare_parameter("s2qyaw", 0.1);
-    node.declare_parameter("vel_sigma", 0.01);
-    node.declare_parameter("vyaw_sigma", 0.05);
+    node.declare_parameter("standard.s2qxy", 0.1);
+    node.declare_parameter("standard.s2qz", 0.1);
+    node.declare_parameter("standard.s2qyaw", 0.1);
+    node.declare_parameter("standard.vel_sigma", 0.01);
+    node.declare_parameter("standard.vyaw_sigma", 0.05);
+    node.declare_parameter("outpost.s2qxy", 0.1);
+    node.declare_parameter("outpost.s2qz", 0.0004);
+    node.declare_parameter("outpost.s2qyaw", 0.1);
+    node.declare_parameter("outpost.vel_sigma", 0.01);
+    node.declare_parameter("outpost.vyaw_sigma", 0.05);
     node.declare_parameter("match_max_cost", graph_optimizer::kDefaultArmorMatchMaxCost);
-    node.declare_parameter("pixel_noise_std", 2.0);
-    node.declare_parameter("geo_tangential", 0.01);
-    node.declare_parameter("geo_radial", 0.03);
-    node.declare_parameter("geo_height", 0.01);
-    node.declare_parameter("geo_yaw", 0.005);
+    node.declare_parameter(
+        "outpost.ambiguous_match_margin",
+        graph_optimizer::kDefaultOutpostAmbiguousMatchMargin);
+    node.declare_parameter("outpost.debug_height", false);
+    node.declare_parameter("match_quality.window_size", 10);
+    node.declare_parameter("match_quality.failure_threshold", 1.0);
+    node.declare_parameter("match_quality.failure_ratio", 0.60);
+    node.declare_parameter("standard.pixel_noise_std", 1.0);
+    node.declare_parameter("outpost.pixel_noise_std", 2.0);
+    node.declare_parameter("observation_noise_reference_distance", 5.0);
+    node.declare_parameter("pixel_noise_distance_quadratic", 0.025);
+    node.declare_parameter("pose_prior_sigma", 0.1);
+    node.declare_parameter("pose_prior_distance_scale", 0.05);
+    node.declare_parameter("use_edge_reproj_factor", true);
+    node.declare_parameter("edge_reproj_sigma", 0.05);
+    node.declare_parameter("edge_loss_slope_k", 2.0);
+    node.declare_parameter("standard.armor_pitch", 15.0 * M_PI / 180.0);
+    node.declare_parameter("outpost.armor_pitch", -0.26);
+    node.declare_parameter("outpost.radius", 0.2765);
+    node.declare_parameter("outpost.initial_vyaw", 0.0);
+    node.declare_parameter("outpost.prior_sigma.radius", 1.0);
+    node.declare_parameter("outpost.prior_sigma.dz", 1.0);
+    node.declare_parameter("standard.geo.tangential", 0.01);
+    node.declare_parameter("standard.geo.radial", 0.03);
+    node.declare_parameter("standard.geo.height", 0.01);
+    node.declare_parameter("standard.geo.yaw", 0.005);
+    node.declare_parameter("geo_tangential_distance_scale", 0.20);
+    node.declare_parameter("geo_radial_distance_scale", 0.20);
+    node.declare_parameter("geo_yaw_distance_scale", 0.10);
+    node.declare_parameter("outpost.geo.tangential", 0.01);
+    node.declare_parameter("outpost.geo.radial", 0.03);
+    node.declare_parameter("outpost.geo.height", 0.05);
+    node.declare_parameter("outpost.geo.yaw", 0.10);
 
-    node.declare_parameter("camera_fx", 2411.0);
-    node.declare_parameter("camera_fy", 2411.0);
-    node.declare_parameter("camera_cx", 720.0);
-    node.declare_parameter("camera_cy", 640.0);
-    node.declare_parameter("distortion_k1", -0.093);
-    node.declare_parameter("distortion_k2", 0.154);
-    node.declare_parameter("distortion_p1", 0.0001);
-    node.declare_parameter("distortion_p2", -0.0006);
+    node.declare_parameter("camera_name", "narrow_stereo");
+    node.declare_parameter(
+        "camera_info_url",
+        "package://armor_simulation/config/camera_info.yaml");
 
     node.declare_parameter("verbose", true);
     node.declare_parameter("cold_start_frames", 3);
@@ -46,6 +77,7 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
     : Node("graph_optimizer_test", options) {
     declareTrackerParameters(*this);
     tracker_config_ = loadTrackerConfig();
+    debug_outpost_height_ = get_parameter("outpost.debug_height").as_bool();
     tracker_ = std::make_unique<graph_optimizer::ArmorGraphTracker>(tracker_config_);
 
     tf2_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
@@ -64,40 +96,85 @@ GraphOptimizerTest::GraphOptimizerTest(const rclcpp::NodeOptions& options)
         "/graph_optimizer/marker", 10);
 
     RCLCPP_INFO(get_logger(), "Graph optimizer test initialized");
-    const bool legacy_use_2d_observation =
-        get_parameter("use_2d_observation").as_bool();
-    RCLCPP_INFO(get_logger(), "  typed pixel graph enabled; use_2d_observation parameter kept for compatibility: %s",
-                legacy_use_2d_observation ? "true" : "false");
     RCLCPP_INFO(get_logger(), "  s2qxy: %.3f, s2qz: %.3f, s2qyaw: %.3f",
                 tracker_config_.s2qxy, tracker_config_.s2qz, tracker_config_.s2qyaw);
 }
 
 graph_optimizer::TrackerConfig GraphOptimizerTest::loadTrackerConfig() {
     graph_optimizer::TrackerConfig config;
-    config.s2qxy = get_parameter("s2qxy").as_double();
-    config.s2qz = get_parameter("s2qz").as_double();
-    config.s2qyaw = get_parameter("s2qyaw").as_double();
-    config.vel_sigma = get_parameter("vel_sigma").as_double();
-    config.vyaw_sigma = get_parameter("vyaw_sigma").as_double();
+    config.s2qxy = get_parameter("standard.s2qxy").as_double();
+    config.s2qz = get_parameter("standard.s2qz").as_double();
+    config.s2qyaw = get_parameter("standard.s2qyaw").as_double();
+    config.vel_sigma = get_parameter("standard.vel_sigma").as_double();
+    config.vyaw_sigma = get_parameter("standard.vyaw_sigma").as_double();
+    config.outpost_s2qxy = get_parameter("outpost.s2qxy").as_double();
+    config.outpost_s2qz = get_parameter("outpost.s2qz").as_double();
+    config.outpost_s2qyaw = get_parameter("outpost.s2qyaw").as_double();
+    config.outpost_vel_sigma = get_parameter("outpost.vel_sigma").as_double();
+    config.outpost_vyaw_sigma =
+        get_parameter("outpost.vyaw_sigma").as_double();
     config.match_max_cost = get_parameter("match_max_cost").as_double();
-    config.pixel_sigma = get_parameter("pixel_noise_std").as_double();
-    config.geo_noise.tangential = get_parameter("geo_tangential").as_double();
-    config.geo_noise.radial = get_parameter("geo_radial").as_double();
-    config.geo_noise.height = get_parameter("geo_height").as_double();
-    config.geo_noise.yaw = get_parameter("geo_yaw").as_double();
+    config.outpost_ambiguous_match_margin =
+        get_parameter("outpost.ambiguous_match_margin").as_double();
+    config.match_quality_window_size =
+        get_parameter("match_quality.window_size").as_int();
+    config.match_quality_failure_threshold =
+        get_parameter("match_quality.failure_threshold").as_double();
+    config.match_quality_failure_ratio =
+        get_parameter("match_quality.failure_ratio").as_double();
+    config.pixel_sigma =
+        get_parameter("standard.pixel_noise_std").as_double();
+    config.outpost_pixel_sigma =
+        get_parameter("outpost.pixel_noise_std").as_double();
+    config.observation_noise_reference_distance =
+        get_parameter("observation_noise_reference_distance").as_double();
+    config.pixel_sigma_distance_quadratic =
+        get_parameter("pixel_noise_distance_quadratic").as_double();
+    config.pose_prior_sigma = get_parameter("pose_prior_sigma").as_double();
+    config.pose_prior_distance_scale =
+        get_parameter("pose_prior_distance_scale").as_double();
+    config.use_edge_reproj_factor =
+        get_parameter("use_edge_reproj_factor").as_bool();
+    config.edge_reproj_sigma = get_parameter("edge_reproj_sigma").as_double();
+    config.edge_loss_slope_k = get_parameter("edge_loss_slope_k").as_double();
+    config.standard_armor_pitch =
+        get_parameter("standard.armor_pitch").as_double();
+    config.outpost_armor_pitch =
+        get_parameter("outpost.armor_pitch").as_double();
+    config.outpost_radius = get_parameter("outpost.radius").as_double();
+    config.outpost_initial_vyaw =
+        get_parameter("outpost.initial_vyaw").as_double();
+    config.outpost_prior_noise.radius =
+        get_parameter("outpost.prior_sigma.radius").as_double();
+    config.outpost_prior_noise.dz =
+        get_parameter("outpost.prior_sigma.dz").as_double();
+    config.geo_noise.tangential =
+        get_parameter("standard.geo.tangential").as_double();
+    config.geo_noise.radial =
+        get_parameter("standard.geo.radial").as_double();
+    config.geo_noise.height =
+        get_parameter("standard.geo.height").as_double();
+    config.geo_noise.yaw =
+        get_parameter("standard.geo.yaw").as_double();
+    config.geo_tangential_distance_scale =
+        get_parameter("geo_tangential_distance_scale").as_double();
+    config.geo_radial_distance_scale =
+        get_parameter("geo_radial_distance_scale").as_double();
+    config.geo_yaw_distance_scale =
+        get_parameter("geo_yaw_distance_scale").as_double();
+    config.outpost_geo_noise.tangential =
+        get_parameter("outpost.geo.tangential").as_double();
+    config.outpost_geo_noise.radial =
+        get_parameter("outpost.geo.radial").as_double();
+    config.outpost_geo_noise.height =
+        get_parameter("outpost.geo.height").as_double();
+    config.outpost_geo_noise.yaw =
+        get_parameter("outpost.geo.yaw").as_double();
 
-    const double fx = get_parameter("camera_fx").as_double();
-    const double fy = get_parameter("camera_fy").as_double();
-    const double cx = get_parameter("camera_cx").as_double();
-    const double cy = get_parameter("camera_cy").as_double();
-    config.camera_matrix << fx, 0.0, cx,
-                            0.0, fy, cy,
-                            0.0, 0.0, 1.0;
-    config.distortion[0] = get_parameter("distortion_k1").as_double();
-    config.distortion[1] = get_parameter("distortion_k2").as_double();
-    config.distortion[2] = get_parameter("distortion_p1").as_double();
-    config.distortion[3] = get_parameter("distortion_p2").as_double();
-    config.distortion[4] = 0.0;
+    // 只在 ROS node 层读取 CameraInfo；typed graph core 仍只接收纯 K/D 数值。
+    const auto calibration = loadCameraCalibrationFromInfo(*this);
+    config.camera_matrix = calibration.camera_matrix;
+    config.distortion = calibration.distortion;
 
     config.optimizer.cold_start_frames = get_parameter("cold_start_frames").as_int();
     config.optimizer.verbose = get_parameter("verbose").as_bool();
@@ -127,6 +204,10 @@ void GraphOptimizerTest::armorsCallback(
 
     graph_optimizer::TrackerFrameInput input{*msg, dt, T_camera_to_odom};
     auto result = tracker_->update(input);
+    if (!result.reset_reason.empty()) {
+        RCLCPP_WARN(get_logger(), "Graph optimizer reset: %s",
+                    result.reset_reason.c_str());
+    }
     if (result.accepted_frame) {
         frame_time_.commit(msg->header.stamp);
     }
@@ -137,6 +218,7 @@ void GraphOptimizerTest::armorsCallback(
     }
     if (!result.accepted_frame || !result.solved) return;
 
+    logOutpostHeightDebug(result, *msg);
     publishResult(result);
     publishMarkers(result, *msg);
     publishTrackerTarget(result);
@@ -145,11 +227,68 @@ void GraphOptimizerTest::armorsCallback(
     frame_count++;
     if (frame_count % 10 == 0) {
         const auto& s = result.state;
-        RCLCPP_INFO(get_logger(),
-                    "Frame %d: x=%.3f, y=%.3f, z=%.3f, yaw=%.3f, r1=%.3f, r2=%.3f, dz=%.3f",
-                    frame_count, s.center.x(), s.center.y(), s.center.z(), s.yaw,
-                    s.radius_1, s.radius_2, s.dz);
+        RCLCPP_INFO_STREAM(
+            get_logger(),
+            "Frame " << frame_count
+                     << ": x=" << s.center.x()
+                     << ", y=" << s.center.y()
+                     << ", z=" << s.center.z()
+                     << ", yaw=" << s.yaw
+                     << ", r1=" << s.radius_1
+                     << ", r2=" << s.radius_2
+                     << ", dz1=" << s.dz
+                     << ", dz2=" << s.outpost_dz_2);
     }
+}
+
+void GraphOptimizerTest::logOutpostHeightDebug(
+    const graph_optimizer::TrackerUpdateResult& result,
+    const auto_aim_interfaces::msg::Armors& observed) const {
+    if (!debug_outpost_height_ || result.state.armor_count != 3) return;
+
+    const auto& s = result.state;
+    std::ostringstream line;
+    line << "outpost_height frame=" << result.frame_id
+         << " center_z=" << s.center.z()
+         << " dz1=" << s.dz
+         << " dz2=" << s.outpost_dz_2
+         << " slots=[0:" << s.center.z()
+         << ",1:" << s.center.z() + s.dz
+         << ",2:" << s.center.z() + s.outpost_dz_2
+         << "] obs={";
+
+    bool first = true;
+    for (std::size_t i = 0; i < observed.armors.size(); ++i) {
+        const auto& armor = observed.armors[i];
+        if (armor.number != "outpost") continue;
+
+        const int matched_index =
+            i < result.matched_indices.size() ? result.matched_indices[i] : -1;
+        const double match_cost =
+            i < result.match_costs.size() ? result.match_costs[i] :
+            std::numeric_limits<double>::quiet_NaN();
+        const double slot_z =
+            matched_index == 0 ? s.center.z() :
+            matched_index == 1 ? s.center.z() + s.dz :
+            matched_index == 2 ? s.center.z() + s.outpost_dz_2 :
+            std::numeric_limits<double>::quiet_NaN();
+        const double z_residual =
+            std::isfinite(slot_z) ? slot_z - armor.pose.position.z :
+            std::numeric_limits<double>::quiet_NaN();
+
+        if (!first) line << "; ";
+        first = false;
+        line << "#" << i
+             << ":slot=" << matched_index
+             << ",z=" << armor.pose.position.z
+             << ",yaw=" << armor.yaw
+             << ",cost=" << match_cost
+             << ",slot_z=" << slot_z
+             << ",z_res=" << z_residual;
+    }
+    line << "}";
+
+    RCLCPP_INFO_STREAM(get_logger(), line.str());
 }
 
 bool GraphOptimizerTest::lookupCameraToOdom(
@@ -191,7 +330,7 @@ void GraphOptimizerTest::publishResult(
     armor.pose.orientation = tf2::toMsg(q);
     armor.yaw = result.state.yaw;
     armor.type = "small";
-    armor.number = "4";
+    armor.number = result.state.armor_count == 3 ? "outpost" : "4";
 
     msg.armors.push_back(armor);
     result_pub_->publish(msg);
@@ -203,20 +342,9 @@ void GraphOptimizerTest::publishTrackerTarget(
     target.header.stamp = now();
     target.header.frame_id = "odom";
 
-    target.enemy.tracking = true;
-    target.enemy.position.x = result.state.center.x();
-    target.enemy.position.y = result.state.center.y();
-    target.enemy.position.z = result.state.center.z();
-    target.enemy.velocity.x = result.state.velocity.x();
-    target.enemy.velocity.y = result.state.velocity.y();
-    target.enemy.velocity.z = result.state.velocity.z();
-    target.enemy.orientation_yaw = result.state.yaw;
-    target.enemy.v_yaw = result.state.vyaw;
-    target.enemy.radius_1 = result.state.radius_1;
-    target.enemy.radius_2 = result.state.radius_2;
-    target.enemy.dz = result.state.dz;
+    fillTrackerTargetEnemyFromState(result.state, target.enemy);
 
-    target.armors_num = 4;
+    target.armors_num = result.state.armor_count;
     tracker_target_pub_->publish(target);
 }
 
@@ -236,14 +364,16 @@ void GraphOptimizerTest::publishMarkers(
     pm.lifetime = rclcpp::Duration::from_seconds(0.1);
     pm.pose.position.x = result.state.center.x();
     pm.pose.position.y = result.state.center.y();
-    pm.pose.position.z = result.state.center.z() + result.state.dz / 2.0;
+    pm.pose.position.z = result.state.armor_count == 3
+        ? result.state.center.z()
+        : result.state.center.z() + result.state.dz / 2.0;
     pm.scale.x = pm.scale.y = pm.scale.z = 0.1;
     pm.color.a = 1.0;
     pm.color.g = 1.0;
     markers->markers.push_back(pm);
 
     for (auto* ns : {"armors_pred", "armors_obs"}) {
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             visualization_msgs::msg::Marker del;
             del.header.stamp = ts;
             del.header.frame_id = "odom";
@@ -267,7 +397,10 @@ void GraphOptimizerTest::publishMarkers(
         marker.pose.position.y = pred.position.y();
         marker.pose.position.z = pred.position.z();
         tf2::Quaternion q;
-        q.setRPY(0.0, 15.0 * M_PI / 180.0, pred.yaw);
+        const double pitch = result.state.armor_count == 3
+            ? tracker_config_.outpost_armor_pitch
+            : tracker_config_.standard_armor_pitch;
+        q.setRPY(0.0, pitch, pred.yaw);
         marker.pose.orientation = tf2::toMsg(q);
         marker.scale.x = 0.005;
         marker.scale.y = 0.135;
@@ -289,7 +422,8 @@ void GraphOptimizerTest::publishMarkers(
         marker.action = visualization_msgs::msg::Marker::ADD;
         marker.lifetime = rclcpp::Duration::from_seconds(0.1);
         marker.pose.position = obs.pose.position;
-        marker.pose.orientation = tf2::toMsg(observedArmorMarkerQuaternion(obs.yaw));
+        marker.pose.orientation = tf2::toMsg(
+            observedArmorMarkerQuaternion(obs.yaw, obs.number == "outpost"));
         marker.scale.x = 0.005;
         marker.scale.y = 0.135;
         marker.scale.z = 0.125;

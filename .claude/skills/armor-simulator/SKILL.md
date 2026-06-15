@@ -1,9 +1,9 @@
 ---
 name: armor-simulator
-description: Use when working with the armor plate simulation pipeline — launching nodes, configuring noise models, debugging filter chains, or understanding TF/camera data flow
+description: Use when working with the armor/rune simulation pipeline — launching nodes, configuring noise models, debugging filter chains, marker output, ground truth, or understanding TF/camera data flow
 ---
 
-# 装甲板仿真器
+# 装甲板 / 能量机关仿真器
 
 ## 代码结构
 
@@ -16,12 +16,14 @@ src/armor_simulation/                    (namespace armor_sim)
 │   ├── detection_noise.hpp            DetectionNoise (像素噪声/检测概率)
 │   └── pnp_pose_utils.hpp             PnP RPY 提取 + 平面双解 yaw 修正
 ├── src/
-│   ├── armor_simulation.cpp           主仿真节点 (运动+相机+噪声+PnP)
+│   ├── armor_simulation.cpp           装甲板/前哨站仿真节点 (运动+相机+噪声+PnP)
+│   ├── rune_simulation.cpp            能量机关仿真节点 (五点观测+active blade+marker)
 │   ├── gimbal_simulation.cpp          云台仿真 (S-curve+TF+反馈)
 │   └── angle_solver.cpp              角度解算 (目标位置→云台角度)
 ├── config/simulation_config.yaml      所有参数 (/armor_simulation_node)
 ├── launch/simulation.launch.py        仅仿真器
-└── msg/GroundTruth.msg                真值: x,y,z,yaw,vx,vy,vz,vyaw,r1,r2,dz
+├── msg/GroundTruth.msg                装甲板真值: x,y,z,yaw,vx,vy,vz,vyaw,r1,r2,dz
+└── msg/RuneGroundTruth.msg            能量机关真值: center, normal_yaw/pitch, roll, vroll, mode, active_blades
 ```
 
 ## 构建与启动
@@ -43,9 +45,13 @@ ros2 run armor_simulation angle_solver
 |------|---------|--------|------|
 | `/detector/armors` | Armors | armor_sim_node | 带噪声观测 (4 角点像素 + 3D 位姿 + yaw) |
 | `/armor_simulation/ground_truth` | GroundTruth | armor_sim_node | 11 维真值 |
+| `/rune_detector/rune_targets` | RuneTargets | rune_sim_node | 能量机关观测紧凑数组，只包含五点像素，不带物理编号 |
+| `/detector/rune_targets` | RuneTargets | rune_sim_node | 兼容旧话题，同上 |
+| `/rune_simulation/ground_truth` | RuneGroundTruth | rune_sim_node | 能量机关中心点、normal_yaw/pitch、roll/vroll、模式和 active blade |
 | `/send_pack` | SendData | angle_solver | 目标 yaw/pitch (度) |
 | `/recieve_pack` | RecieveData | gimbal_sim | 当前 yaw/pitch + shoot_speed |
 | `/simulation/marker` | MarkerArray | armor_sim_node | 青色球=真值, 紫色立方=装甲板 |
+| `/rune_simulation/marker` | MarkerArray | rune_sim_node | 与图优化一致：中心球、目标球、状态文本、五片扇叶和观测扇叶 |
 
 一条 `/detector/armors` 中 Armor 消息:
 
@@ -69,6 +75,36 @@ area                                    # 像素面积 (px²)
    - 过滤链: 朝向 → 检测概率 → 4角点投影+可见性 → 装甲板级相关像素噪声 → IPPE PnP → yaw 先验修正双解
 6. **Marker 管理** — 每帧先 DELETE 全部 obs marker (ID 0-3)，再 ADD 可见装甲板 (lifetime 0.1s) → 掉检即时消失
 7. **发布** — `/detector/armors` + `/ground_truth` + `/simulation/marker`
+
+## 能量机关仿真输出约定
+
+`rune_simulation_node` 不移植 detector，直接从 3D 五点模型投影出像素观测：
+
+```text
+RuneTarget pixel order = r_center, near_point, left_point, far_point, right_point
+```
+
+- 小符每 3 秒随机选择 1 片 active blade。
+- 大符每 3 秒随机选择 2 片 active blade。
+- `/rune_detector/rune_targets` 和 `/detector/rune_targets` 只发布观测到的 active blade；
+  未 active 或不可见/掉检的叶片不进入检测消息。
+- 物理扇叶编号只保留在 ground truth 和 marker 调试语义中，不进入 `RuneTarget`。
+- `/rune_simulation/ground_truth` 只发布中心点 `x/y/z`、符面 `normal_yaw/normal_pitch`、
+  `roll/vroll`、`mode` 和 `active_blades`，
+  不发布每片叶片的 3D 点。
+- `RuneInfo` 同步发布 `normal_yaw/normal_pitch`；marker 中心球和目标球的 orientation
+  也使用这两个姿态参数。
+
+Marker 固定使用 `odom` frame，`lifetime=0.1s`，并和 `/rune_graph_optimizer/marker`
+保持同一套 namespace/type：
+
+| namespace | 类型 | 含义 |
+|-----------|------|------|
+| `rune_center` | `SPHERE` | 能量机关中心点，绿色，`scale=0.06` |
+| `rune_target` | `SPHERE` | 当前目标点，红色，`scale=0.08` |
+| `rune` | `SPHERE` + `LINE_STRIP` | 5 片扇叶位置和中心到扇叶的半径线，半透明绿色 |
+| `observed_position` | `SPHERE` | 当前观测到的 active blade，半透明紫色 |
+| `rune_status` | `TEXT_VIEW_FACING` | `roll` 和观测数量 |
 
 ## 核心接口
 
@@ -136,13 +172,14 @@ array<Vector3d,4> computeArmorCorners(position, orientation, width, height)
 ### 云台真值追踪
 
 ```yaml
-/armor_simulation_node:
+/**:
   ros__parameters:
     publish_gimbal_gt: true  # 仿真器直接发布 /send_pack，绕过 tracker→angle_solver 闭环
 ```
 
 `gimbal_simulation` 本身仍只订阅 `/send_pack`；真值 yaw/pitch 由
-`armor_simulation_node` 计算并发布。
+当前启动的 `armor_simulation_node` 或 `rune_simulation_node` 计算并发布。
+armor 瞄准机器人中心；rune 优先瞄准当前观测扇叶，其次 active blade 的击打中心。
 
 ### angle_solver 节点
 
@@ -189,9 +226,8 @@ Odom: X→前 Y→左 Z→上      Camera: X→右 Y→下 Z→前
 
     initial_state: {x:0.0, y:-4.0, yaw:0.1, x_velocity:0.0, y_velocity:0.0, yaw_velocity:2.0}
     geometry: {z1:0.0, z2:0.15, r1:0.28, r2:0.38}
-    camera_fx: 2411.0; camera_fy: 2411.0               # 内参
-    camera_cx: 720.0; camera_cy: 640.0
-    image_width: 1920; image_height: 1440
+    camera_name: narrow_stereo
+    camera_info_url: package://armor_simulation/config/camera_info.yaml
     # 外参硬编码在源码中: roll=-1.571(-90°), ty=-0.045, tz=0.08557
     # 外参在运行时通过 TF odom→camera_optical_frame 动态更新
 

@@ -8,6 +8,7 @@
 #include <rclcpp/time.hpp>
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -29,10 +30,12 @@ struct TrackerUpdateResult {
     bool cold_start = false;
     bool solve_failed = false;
     std::string solve_error;
+    std::string reset_reason;
     uint64_t frame_id = 0;
     TrackerState state;
     std::vector<PredictedArmor> predicted_armors;
     std::vector<int> matched_indices;
+    std::vector<double> match_costs;
 };
 
 // 只在 accepted frame 后 commit 时间戳，避免空观测或拒绝帧污染下一帧 dt。
@@ -61,6 +64,10 @@ public:
 private:
     void initialize(const auto_aim_interfaces::msg::Armors& msg);
     void reset();
+    void rememberOutpostState(const TrackerState& state);
+    void updateMatchQualityWindow(const std::vector<int>& matched_indices,
+                                  const std::vector<double>& match_costs);
+    bool matchQualityFailed() const;
     TrackerUpdateResult makeResult(bool accepted_frame, bool solved,
                                    std::vector<int> matched_indices) const;
     TrackerUpdateResult makeResult(bool accepted_frame,
@@ -68,6 +75,10 @@ private:
                                    std::vector<int> matched_indices) const;
 
     ArmorCvPixelGraph graph_;
+    TrackerConfig config_;
+    std::deque<bool> match_quality_failures_;
+    TrackerState last_outpost_state_;
+    bool has_last_outpost_state_ = false;
 };
 
 }  // namespace filter_test::graph_optimizer

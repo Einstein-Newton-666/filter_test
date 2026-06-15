@@ -1,6 +1,8 @@
 #include "filter_test/graph_optimizer/armor_tracker.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <utility>
 
 namespace filter_test::graph_optimizer {
@@ -24,7 +26,8 @@ void FrameTimeTracker::commit(const builtin_interfaces::msg::Time& stamp) {
 }
 
 ArmorGraphTracker::ArmorGraphTracker(TrackerConfig config)
-    : graph_(std::move(config)) {}
+    : graph_(config),
+      config_(std::move(config)) {}
 
 TrackerUpdateResult ArmorGraphTracker::update(const TrackerFrameInput& input) {
     if (input.armors_msg.armors.empty()) {
@@ -45,10 +48,34 @@ TrackerUpdateResult ArmorGraphTracker::update(const TrackerFrameInput& input) {
     const bool all_unmatched = !output.matched_indices.empty() &&
         std::none_of(output.matched_indices.begin(), output.matched_indices.end(),
                      [](int idx) { return idx >= 0; });
+    const bool has_matched = !output.matched_indices.empty() &&
+        std::any_of(output.matched_indices.begin(), output.matched_indices.end(),
+                    [](int idx) { return idx >= 0; });
+    if (has_matched && output.solve_result.optimized) {
+        rememberOutpostState(output.state);
+    }
     if (all_unmatched) {
-        auto unmatched = std::move(output.matched_indices);
-        reset();
-        return makeResult(false, false, std::move(unmatched));
+        if (output.state.armor_count != 3) {
+            auto unmatched = std::move(output.matched_indices);
+            reset();
+            auto result = makeResult(false, false, std::move(unmatched));
+            result.reset_reason = "all observations unmatched";
+            return result;
+        }
+    }
+    if (output.solve_result.optimized) {
+        updateMatchQualityWindow(output.matched_indices, output.match_costs);
+        if (output.state.armor_count == 3) {
+            // 前哨站一帧通常只有一块板。短时错配/模糊时如果直接 reset，
+            // 下一帧会把当前观测板重新初始化成 slot0，导致 center.z 换槽跳变。
+            match_quality_failures_.clear();
+        } else if (matchQualityFailed()) {
+            auto matched = std::move(output.matched_indices);
+            reset();
+            auto result = makeResult(false, false, std::move(matched));
+            result.reset_reason = "match quality window failed";
+            return result;
+        }
     }
     if (output.solve_result.failed) {
         // 求解失败时不丢弃 tracker 生命周期，只把错误标志传给发布层。
@@ -58,6 +85,7 @@ TrackerUpdateResult ArmorGraphTracker::update(const TrackerFrameInput& input) {
         makeResult(true, output.solve_result, std::move(output.matched_indices));
     result.state = output.state;
     result.predicted_armors = std::move(output.predicted_armors);
+    result.match_costs = std::move(output.match_costs);
     return result;
 }
 
@@ -66,11 +94,59 @@ uint64_t ArmorGraphTracker::frameId() const {
 }
 
 void ArmorGraphTracker::initialize(const auto_aim_interfaces::msg::Armors& msg) {
-    graph_.initialize(msg);
+    const bool outpost = std::any_of(
+        msg.armors.begin(), msg.armors.end(),
+        [](const auto_aim_interfaces::msg::Armor& armor) {
+            return armor.number == "outpost";
+        });
+    graph_.initialize(
+        msg, outpost && has_last_outpost_state_ ? &last_outpost_state_ : nullptr);
 }
 
 void ArmorGraphTracker::reset() {
     graph_.reset();
+    match_quality_failures_.clear();
+}
+
+void ArmorGraphTracker::rememberOutpostState(const TrackerState& state) {
+    if (state.armor_count != 3) return;
+    last_outpost_state_ = state;
+    has_last_outpost_state_ = true;
+}
+
+void ArmorGraphTracker::updateMatchQualityWindow(
+    const std::vector<int>& matched_indices,
+    const std::vector<double>& match_costs) {
+    if (config_.match_quality_window_size <= 0) return;
+
+    double worst_cost = 0.0;
+    bool has_match = false;
+    for (std::size_t i = 0; i < matched_indices.size() && i < match_costs.size(); ++i) {
+        if (matched_indices[i] < 0 || !std::isfinite(match_costs[i])) continue;
+        worst_cost = std::max(worst_cost, match_costs[i]);
+        has_match = true;
+    }
+    if (!has_match) return;
+
+    match_quality_failures_.push_back(
+        worst_cost > config_.match_quality_failure_threshold);
+    while (match_quality_failures_.size() >
+           static_cast<std::size_t>(config_.match_quality_window_size)) {
+        match_quality_failures_.pop_front();
+    }
+}
+
+bool ArmorGraphTracker::matchQualityFailed() const {
+    if (config_.match_quality_window_size <= 0) return false;
+    if (match_quality_failures_.size() <
+        static_cast<std::size_t>(config_.match_quality_window_size)) {
+        return false;
+    }
+    const int failure_count = static_cast<int>(std::count(
+        match_quality_failures_.begin(), match_quality_failures_.end(), true));
+    const double ratio = static_cast<double>(failure_count) /
+        static_cast<double>(match_quality_failures_.size());
+    return ratio > config_.match_quality_failure_ratio;
 }
 
 TrackerUpdateResult ArmorGraphTracker::makeResult(

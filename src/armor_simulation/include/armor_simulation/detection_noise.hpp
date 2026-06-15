@@ -66,16 +66,16 @@ public:
         return Eigen::Vector2d(pixel.x() + noise_u, pixel.y() + noise_v);
     }
 
-    std::array<Eigen::Vector2d, 4> addArmorPixelNoise(
-        const std::array<Eigen::Vector2d, 4>& pixels, double distance) {
+    template<size_t N>
+    std::array<Eigen::Vector2d, N> addCorrelatedPixelNoise(
+        const std::array<Eigen::Vector2d, N>& pixels, double distance) {
         double sigma = pixelNoiseSigma(distance);
         double common_ratio = std::clamp(params_.pixel_noise_common_ratio, 0.0, 1.0);
-        // 装甲板级相关噪声分解:
+        // 目标级相关噪声分解:
         //   p_i' = p_i + n_c + n_i
         //   n_c ~ N(0, (ρσ)^2 I),  n_i ~ N(0, ((sqrt(1-ρ²))σ)^2 I)
         // 非离群点满足 Var(n_c+n_i)=σ²I, 单点总方差不变；ρ 越大,
-        // 四角点共同平移成分越多, 越少破坏矩形的对边平行/宽高约束,
-        // PnP yaw 抖动越小.
+        // 点集共同平移成分越多, 越少破坏目标局部几何约束。
         double common_sigma = sigma * common_ratio;
         double corner_sigma = sigma * std::sqrt(std::max(0.0, 1.0 - common_ratio * common_ratio));
 
@@ -83,7 +83,7 @@ public:
             std::normal_distribution<double>(0.0, common_sigma)(rng_),
             std::normal_distribution<double>(0.0, common_sigma)(rng_));
 
-        std::array<Eigen::Vector2d, 4> noisy = pixels;
+        std::array<Eigen::Vector2d, N> noisy = pixels;
         for (auto& pixel : noisy) {
             double sigma_i = corner_sigma;
             if (params_.use_outliers && uniform_dist_(rng_) < params_.outlier_probability) {
@@ -94,6 +94,11 @@ public:
                 std::normal_distribution<double>(0.0, sigma_i)(rng_));
         }
         return noisy;
+    }
+
+    std::array<Eigen::Vector2d, 4> addArmorPixelNoise(
+        const std::array<Eigen::Vector2d, 4>& pixels, double distance) {
+        return addCorrelatedPixelNoise(pixels, distance);
     }
 
     /**

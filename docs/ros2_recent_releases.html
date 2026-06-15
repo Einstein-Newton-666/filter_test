@@ -85,6 +85,19 @@
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
     background: var(--surface); color: var(--text); font-size: .9em;
   }
+  .doc-nav {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 24px;
+    padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface);
+  }
+  .doc-nav a {
+    display: inline-flex; align-items: center; min-height: 32px;
+    padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font-size: .9em;
+  }
+  .doc-nav a.active {
+    border-color: var(--accent); color: #79c0ff; background: #1a2a3a;
+  }
   .src-list li { word-break: break-all; }
   @media (max-width: 720px) {
     body { padding: 28px 14px; }
@@ -101,6 +114,14 @@
   从 Humble 到 Jazzy、Kilted、Lyrical，再到 Rolling：这不是简单的版本号变化，而是 ROS 2 在
   执行器、RMW 通信、rosbag2、launch、参数系统、Gazebo 集成和可观测性上的持续演进。
 </p>
+
+<nav class="doc-nav">
+  <a href="current_project_architecture.html">当前架构</a>
+  <a href="graph_optimizer_architecture.html">图优化架构</a>
+  <a href="factor_graph_optimization.html">因子图原理</a>
+  <a href="gtsam_graph_optimizer_guide.html">GTSAM 指南</a>
+  <a class="active" href="ros2_recent_releases.html">ROS2 版本参考</a>
+</nav>
 
 <div class="note">
   <strong>时间点说明：</strong>本文按 2026-06-07 可查的 ROS 官方文档整理。
@@ -566,10 +587,10 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    use_2d = LaunchConfiguration('use_2d_observation')
+    use_edge_reproj = LaunchConfiguration('use_edge_reproj_factor')
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_2d_observation', default_value='true'),
+        DeclareLaunchArgument('use_edge_reproj_factor', default_value='true'),
         Node(
             package='filter_test',
             executable='graph_optimizer_test',
@@ -577,7 +598,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 'src/filter_test/config/config.yaml',
-                {'use_2d_observation': use_2d},
+                {'use_edge_reproj_factor': use_edge_reproj},
             ],
             arguments=['--ros-args', '--log-level', 'info'],
         ),
@@ -586,7 +607,7 @@ def generate_launch_description():
 <h3>8.5 rclpy 参数事件：Python 工具节点监听配置变化</h3>
 <p>
   Jazzy 的 <code>ParameterEventHandler</code> 让 Python 调试工具更容易响应参数变化。
-  例如调试时动态观察滤波器模型、观测模式或噪声参数是否被改动。
+  例如调试时动态观察滤波器模型、边缘重投影开关或噪声参数是否被改动。
 </p>
 
 <pre><code class="language-python">import rclpy
@@ -598,9 +619,9 @@ class ParamWatch(Node):
         super().__init__('param_watch')
         self.handler = ParameterEventHandler(self)
         self.callback_handle = self.handler.add_parameter_callback(
-            parameter_name='use_2d_observation',
+            parameter_name='use_edge_reproj_factor',
             node_name='/graph_optimizer_test',
-            callback=lambda p: self.get_logger().info(f'use_2d_observation={p.value}'))
+            callback=lambda p: self.get_logger().info(f'use_edge_reproj_factor={p.value}'))
 
 rclpy.init()
 rclpy.spin(ParamWatch())

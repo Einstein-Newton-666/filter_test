@@ -8,12 +8,17 @@ endif()
 # find dependencies
 find_package(ament_cmake_auto REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Armor.msg"
   "msg/Armors.msg"
   "msg/Anglesolver.msg"
+  "msg/Point2d.msg"
+  "msg/RuneTarget.msg"
+  "msg/RuneTargets.msg"
+  "msg/RuneInfo.msg"
   "msg/TargetPose.msg"
   "msg/Vehicle.msg"
   "msg/Vehicles.msg"

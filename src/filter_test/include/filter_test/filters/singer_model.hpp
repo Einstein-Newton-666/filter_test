@@ -2,6 +2,8 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <initializer_list>
+#include <vector>
 
 namespace singer_model {
 
@@ -114,6 +116,41 @@ public:
 private:
 };
 
+struct MeasureOutpost {
+public:
+    explicit MeasureOutpost(std::initializer_list<int> indices)
+        : output_size(static_cast<int>(indices.size()) * 4), indices_(indices) {}
+
+    explicit MeasureOutpost(const std::vector<int>& indices)
+        : output_size(static_cast<int>(indices.size()) * 4), indices_(indices) {}
+
+    template<typename T>
+    void operator()(const T& x, T& z) const {
+        int out = 0;
+        for (const int i : indices_) {
+            const auto armor_yaw = x[9] + static_cast<double>(i) * 2.0 * M_PI / 3.0;
+            const auto zero = x[0] * 0.0;
+            const auto dz = i == 0 ? zero : (i == 1 ? x[13] : x[14]);
+            const auto armor_x = x[0] - ceres::cos(armor_yaw) * x[12];
+            const auto armor_y = x[3] - ceres::sin(armor_yaw) * x[12];
+            const auto armor_z = x[6] + dz;
+            z[out + 0] = ceres::atan2(armor_y, armor_x);
+            z[out + 1] = ceres::atan2(
+                armor_z, ceres::sqrt(armor_x * armor_x + armor_y * armor_y));
+            z[out + 2] = ceres::sqrt(
+                armor_x * armor_x + armor_y * armor_y + armor_z * armor_z);
+            z[out + 3] = armor_yaw;
+            out += 4;
+        }
+    }
+
+    int input_size = 15;
+    int output_size = 0;
+
+private:
+    std::vector<int> indices_;
+};
+
 inline Eigen::MatrixXd predict_q(double dt, double s2qxy, double s2qz, double s2qyaw, double s2qr, double s2qdz, double tau) {
     Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(15, 15);
 
@@ -171,6 +208,16 @@ inline Eigen::MatrixXd predict_q(double dt, double s2qxy, double s2qz, double s2
     return Q;
 }
 
+inline Eigen::MatrixXd predict_outpost_q(
+    double dt, double s2qxy, double s2qz, double s2qyaw,
+    double s2qr, double s2qdz, double tau) {
+    auto Q = predict_q(dt, s2qxy, s2qz, s2qyaw, s2qr, s2qdz, tau);
+    const double dz_q = s2qdz * std::pow(dt, 4) / 4.0;
+    Q(13, 13) = dz_q;
+    Q(14, 14) = dz_q;
+    return Q;
+}
+
 inline Eigen::MatrixXd measure_r(
     Eigen::VectorXd& z,
     double r_pose,
@@ -181,7 +228,8 @@ inline Eigen::MatrixXd measure_r(
 {
     Eigen::VectorXd r(z.size());
     for(int i = 0; i < (z.size() / 4); i++){
-        double abs_yaw = (abs_yaws.size() > i) ? abs_yaws[i] : 0.0;
+        const auto obs_index = static_cast<std::size_t>(i);
+        double abs_yaw = (abs_yaws.size() > obs_index) ? abs_yaws[obs_index] : 0.0;
         double d2r = abs_yaw * M_PI / 180.0;
         if (use_fixed_r) {
             // 固定R模式：仿真数据无PnP误差

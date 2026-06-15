@@ -1,0 +1,10 @@
+std_msgs/Header header
+float64 x
+float64 y
+float64 z
+float64 normal_yaw
+float64 normal_pitch
+float64 roll
+float64 vroll
+string mode
+int32[] active_blades

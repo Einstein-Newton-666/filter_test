@@ -29,6 +29,8 @@
 #include "armor_simulation/armor_geometry.hpp"
 #include "armor_simulation/detection_noise.hpp"
 #include "armor_simulation/pnp_pose_utils.hpp"
+#include "armor_simulation/rune_geometry.hpp"
+#include "armor_simulation/simulation_common.hpp"
 
 using namespace std::chrono_literals;
 
@@ -55,6 +57,13 @@ private:
   double x_v, y_v, yaw_v;
   double x_a, y_a, yaw_a;
   double r1, r2;
+  std::string mode_;
+  double body_roll_ = 0.0;
+  double body_pitch_ = 0.0;
+  OutpostModelConfig outpost_config_;
+  double outpost_elapsed_time_ = 0.0;
+  std::string camera_name_;
+  std::unique_ptr<camera_info_manager::CameraInfoManager> camera_info_manager_;
 
   // ── 相机模型 (外参每帧从 TF 更新) ──
   CameraModel camera_model_;

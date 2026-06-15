@@ -1,12 +1,13 @@
 # AGENTS.md — filter_test
 
-ROS2 C++ 工作区：基于 EKF/UKF + GTSAM 因子图优化的实时装甲板跟踪。`src/` 下三个包：
+ROS2 C++ 工作区：基于 EKF/UKF + typed GTSAM 因子图优化的实时装甲板跟踪；当前分支也在接入
+能量机关图优化和前哨站三装甲板模型。`src/` 下三个包：
 
 | 包名                   | 作用                                                             |
 |------------------------|------------------------------------------------------------------|
-| `armor_simulation`     | 3D 运动仿真 + 相机投影 + 噪声 + PnP + 云台仿真                  |
-| `filter_test`          | EKF/UKF (`filter`) + iSAM2 图优化 (`graph_optimizer_test`)      |
-| `auto_aim_interfaces`  | 共享的 `Armors` / `Armor` / `TrackerTarget` 消息                |
+| `armor_simulation`     | 3D 运动仿真 + 装甲板/能量机关/前哨站几何 + 相机投影 + 噪声 + PnP + 云台仿真 |
+| `filter_test`          | EKF/UKF (`filter`) + 装甲板 iSAM2 图优化 + `RuneCvGraph` 能量机关图模型 |
+| `auto_aim_interfaces`  | 共享的 `Armors` / `Armor` / `TrackerTarget` / `RuneTarget(s)` / `RuneInfo` 消息 |
 
 详细架构/用法见 `README.md`、`CLAUDE.md` 和 `.claude/skills/armor-graph-optimizer/SKILL.md`。
 本文件是高信噪比的精简摘要。
@@ -19,6 +20,9 @@ colcon build --packages-select armor_simulation filter_test auto_aim_interfaces
 
 # 编译并启用测试
 colcon build --packages-select armor_simulation filter_test --cmake-args -DBUILD_TESTING=ON
+
+# 本机内存紧张时低并发构建
+CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1 --packages-select armor_simulation filter_test auto_aim_interfaces --cmake-args -DBUILD_TESTING=ON
 
 # 运行测试
 colcon test --packages-select filter_test
@@ -65,27 +69,66 @@ GraphOptimizerTest -> ArmorGraphTracker -> ArmorCvPixelGraph -> auto_graph::Grap
 - `graph_optimizer/graph_core.hpp/.cpp` — typed `Var<T>`、key 映射、iSAM2/fixed-lag 生命周期
 - `graph_optimizer/armor_model.hpp/.cpp` — 状态变量、匹配、运动因子、像素重投影和几何因子
 - `graph_optimizer/armor_tracker.hpp/.cpp` — 空观测、reset、求解结果兼容语义
+- `graph_optimizer/rune_model.hpp/.cpp` — `RuneCvGraph`、能量机关 typed 变量、roll 运动因子、叶片重投影/几何因子
 - `graph_optimizer_test.cpp` — ROS 参数、TF、订阅和发布
 
 typed 变量：
 `center` (Point3, 动态)、`velocity` (Vector3, 动态)、`yaw` (Rot2, 动态)、
-`vyaw` (double, 动态)、`radius_a/radius_b` (double, 静态 logistic)、`dz` (double, 静态)。
+`vyaw` (double, 动态)、`radius_a/radius_b` (double, 静态 logistic)、`dz` (double, 静态)，
+以及前哨站静态变量 `outpost_radius/outpost_dz_1/outpost_dz_2`。
 
-2D 像素观测固定启用；`use_2d_observation` 参数仅为旧配置兼容保留。每个匹配装甲板：
+2D 像素观测固定启用。每个匹配装甲板：
 
 1. 插入辅助 `Pose3` key (`h/j/k/l + frame`) 和 pose prior
 2. `ArmorTypedReprojFactor` — 1-key Pose3(camera) → 每个角点 2D 像素误差
 3. `ArmorRadiusCenterZFactor` / `ArmorRadiusDZFactor` — 辅助 Pose3 ↔ center/yaw/radius/dz 几何约束
+4. `ArmorEdgeCenterZReprojFactor` / `ArmorEdgeDZReprojFactor` — 直接连接主状态，
+   参考 auto_aim `EdgeLoss` 对四条边计算角度差和归一化长度/顶点位移误差
 
 匹配代价为 `yaw_diff + 3 * position_error`，`matchArmorIndicesUnique()` 保证单帧 index 唯一；
 未匹配观测标为 `-1` 并跳过写图，避免重复辅助 key。
 
-`armor_simulation_node` 可通过 `publish_gimbal_gt: true` 直接向 `/send_pack` 发布真值 yaw/pitch，
-绕过 tracker → angle_solver 闭环；`gimbal_simulation` 仍订阅 `/send_pack` 并发布 TF。
+`Armor.number == "outpost"` 时切换为三槽位前哨站模型：yaw offset 为
+`0/2π/3/4π/3`，三块共用 `outpost_radius`，index 1/2 分别使用
+`outpost_dz_1/outpost_dz_2`。仿真器将物理 index 写入 `Armor.priority`，
+首帧初始化会用它反推中心 yaw 和中心 z。
+
+能量机关图模型复用同一 `auto_graph::GraphOptimizer` core：
+`RuneCvGraph -> auto_graph::GraphOptimizer -> GTSAM`。typed 变量为
+`center` (Point3, 动态)、`roll` (Rot2, 动态)、`vroll` (double, 动态)、
+`normal_yaw` (Rot2, 静态)。`RuneTargets` 是真实 detector 风格的紧凑五点观测数组，
+不携带物理扇叶编号；`RuneCvGraph` 先做 5 点 PnP，再用预测 roll 和中心位置把观测匹配到 5 个内部 slot。
+每个匹配成功的物理叶片使用辅助 `Pose3` key (`q/s/t/u/y + frame`)。5 点 PnP 成功时作为辅助 pose 初值和 prior；
+失败时回退预测 pose。随后按 `r_center/near/left/far/right` 五点写
+`RuneBladeReprojFactor`，再用 `RuneBladeGeometryFactor` 连接 center/roll/normal_yaw。
+额外的 `RuneBladeDirectReprojFactor` 直接连接 `center/roll/normal_yaw`，使用
+auto_aim 风格 `RuneRollLoss`：只用 `near/left/far/right` 四点的两条对角线角度差和
+归一化长度差。`rune_graph_optimizer` 还维护 auto_aim 5 参数大符曲线拟合器，
+用图优化后的连续 roll 序列输出拟合/预测 roll 和角速度。
+`rune_simulation_node` 发布 `/rune_detector/rune_targets`、`/detector/rune_targets`、
+`/rune_simulation/ground_truth` 和 `/rune_simulation/marker`，`rune_graph_optimizer`
+发布 `/rune_graph_optimizer/rune_info`、`/rune_graph_optimizer/target_pose` 和 marker；
+默认 launch 中仍保持注释，按需开启。
+`normal_yaw/normal_pitch` 表示符面姿态：仿真器写入 `RuneGroundTruth` 和 `RuneInfo`，
+图优化节点写入 `RuneInfo` 和 `TargetPose.orientation`。
+
+`armor_simulation_node` 和 `rune_simulation_node` 通过全局 `publish_gimbal_gt: true` 直接向
+`/send_pack` 发布真值 yaw/pitch，绕过 tracker/graph_optimizer → angle_solver 闭环；
+armor 瞄准机器人中心，rune 优先瞄准当前观测扇叶，其次 active blade 的击打中心。`gimbal_simulation`
+仍订阅 `/send_pack` 并发布 TF。
 
 ## 仿真/PnP/可视化约定
 
 - 装甲板局部坐标：`X=法线, Y=宽度, Z=高度`；角点顺序 `[左下, 左上, 右上, 右下]`
+- `armor_simulation_node` 支持 `mode: standard|outpost`；`outpost` 为三装甲板前哨站几何，
+  参数在 `outpost.radius/dz_1/dz_2/armor_pitch`
+- 能量机关 helper：5 点顺序 `r_center, near_point, left_point, far_point, right_point`；
+  `far_point` 是目标框远端检测点，击打中心单独取半径 `0.700 m`；叶片间隔 `2*pi/5`
+- `rune_simulation_node` 小符每次随机发布 1 片扇叶，大符每次随机发布 2 片扇叶；
+  默认 3 秒切换一组 active blade，`RuneTargets` 只包含观测到的 active blade 五点，不发布物理编号；未 active 的扇叶只画真值 marker
+- 能量机关仿真器和 `rune_graph_optimizer` 使用同一套 marker 类型：
+  `rune_center` 中心球、`rune_target` 目标点球、`rune_status` 文本、
+  `rune` 五片扇叶球/半径线、`observed_position` 观测扇叶球
 - 仿真几何：`pos = center - r * [cos(armor_yaw), sin(armor_yaw)]`；marker/观测 pitch 统一为 `+15°`
 - `CameraModel::estimatePose()` 使用 OpenCV `SOLVEPNP_IPPE`。IPPE 仍可能有两个相近平面候选；
   仿真侧用 `correctPlanarPnPAmbiguity()` 按 yaw 先验修正分支，并在 `success=false` 时跳过观测
@@ -95,9 +138,10 @@ typed 变量：
 ## 配置文件 (修改这些，而不是头文件默认值)
 
 - `src/filter_test/config/config.yaml` — `/filter` (CV/Singer、EKF/UKF、R 参数) 和
-  `/graph_optimizer_test` (像素 σ、几何噪声、`vel_sigma/vyaw_sigma`、smoother、相机内参)
+  `/graph_optimizer_test` (像素 σ、几何噪声、auto_aim edge 重投影、`vel_sigma/vyaw_sigma`、smoother、`camera_info_url`)
 - `src/armor_simulation/config/simulation_config.yaml` — 初始状态、运动限制、几何参数、
-  像素噪声 U 形模型、`pixel_noise_common_ratio`、离群点、相机内参
+  `mode: standard|outpost`、前哨站 `outpost.*`、像素噪声 U 形模型、
+  `pixel_noise_common_ratio`、离群点、`camera_info_url`
 
 ## 已知问题 (未经重新调参请勿"修复")
 

@@ -21,7 +21,12 @@ public:
         double s2qxy_cv = 0.5, double s2qz_cv = 1.0, double s2qyaw_cv = 0.5, double s2qr_cv = 10.0, double s2qdz_cv = 1.0,
         double s2qxy_singer = 0.5, double s2qz_singer = 1.0, double s2qyaw_singer = 0.5, double s2qr_singer = 10.0, double s2qdz_singer = 1.0,
         double tau_singer = 1.0,
-        double ukf_alpha = 0.001, double ukf_beta = 2.0, double ukf_kappa = 0.0);
+        double ukf_alpha = 0.001, double ukf_beta = 2.0, double ukf_kappa = 0.0,
+        double outpost_radius = 0.2765,
+        double init_r = 0.25,
+        double outpost_s2qxy_cv = 0.5, double outpost_s2qz_cv = 1.0, double outpost_s2qyaw_cv = 0.5, double outpost_s2qr_cv = 10.0, double outpost_s2qdz_cv = 1.0,
+        double outpost_s2qxy_singer = 0.5, double outpost_s2qz_singer = 1.0, double outpost_s2qyaw_singer = 0.5, double outpost_s2qr_singer = 10.0, double outpost_s2qdz_singer = 1.0,
+        double outpost_r_pose_det = 0.01, double outpost_r_distance_det = 0.01, double outpost_r_yaw_det = 0.05);
 
     void init(auto_aim_interfaces::msg::Armors::SharedPtr & armors_msg);
 
@@ -53,14 +58,19 @@ private:
     double s2qxy_cv_, s2qz_cv_, s2qyaw_cv_, s2qr_cv_, s2qdz_cv_;
     // Singer模型过程噪声参数
     double s2qxy_singer_, s2qz_singer_, s2qyaw_singer_, s2qr_singer_, s2qdz_singer_;
+    double outpost_s2qxy_cv_, outpost_s2qz_cv_, outpost_s2qyaw_cv_, outpost_s2qr_cv_, outpost_s2qdz_cv_;
+    double outpost_s2qxy_singer_, outpost_s2qz_singer_, outpost_s2qyaw_singer_, outpost_s2qr_singer_, outpost_s2qdz_singer_;
     // Singer模型机动时间常数
     double tau_singer_;
     
     double r_pose_, r_distance_, r_yaw_;
+    double outpost_r_pose_, outpost_r_distance_, outpost_r_yaw_;
     bool use_fixed_r_;  // true=固定R（仿真），false=距离相关R（检测器）
 
     double last_yaw;
     Eigen::VectorXd last_result_;  // 最近一次滤波结果，用于误差计算
+    bool tracking_outpost_ = false;
+    double outpost_radius_ = 0.2765;
 
     bool use_ekf_;      // true: EKF, false: UKF
     bool use_cv_model_; // true: CV模型, false: Singer模型
@@ -68,5 +78,3 @@ private:
     // UKF参数
     double ukf_alpha_, ukf_beta_, ukf_kappa_;
 };
-
-

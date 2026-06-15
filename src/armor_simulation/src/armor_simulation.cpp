@@ -9,51 +9,83 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     // ═══════════════════════════════════════════════════════
     // 运动参数
     // ═══════════════════════════════════════════════════════
+    mode_ = declare_parameter<std::string>("mode", "standard");
     publish_rate       = declare_parameter<int>("publish_rate", 15);
-    linear_limit       = declare_parameter<double>("linear_limit", 3.5);
-    angle_limit        = declare_parameter<double>("angle_limit", 10.0);
-    linear_speed_limit = declare_parameter<double>("linear_speed_limit", 1.2);
-    angle_speed_limit  = declare_parameter<double>("angle_speed_limit", 10.0);
-    linear_acc         = declare_parameter<double>("linear_acceleration", 0.2);
-    angle_acc          = declare_parameter<double>("angular_acceleration", 0.3924);
 
-    x     = declare_parameter<double>("initial_state.x", 0.0);
-    y     = declare_parameter<double>("initial_state.y", -5.0);
-    yaw   = declare_parameter<double>("initial_state.yaw", 0.1);
-    x_v   = declare_parameter<double>("initial_state.x_velocity", 0.0);
-    y_v   = declare_parameter<double>("initial_state.y_velocity", -0.8);
-    yaw_v = declare_parameter<double>("initial_state.yaw_velocity", 6.0);
-    x_a   = declare_parameter<double>("initial_state.x_acceleration", 0.0);
-    y_a   = declare_parameter<double>("initial_state.y_acceleration", 0.0);
-    yaw_a = declare_parameter<double>("initial_state.yaw_acceleration", 0.1);
+    linear_limit       = declare_parameter<double>("standard.linear_limit", 3.5);
+    angle_limit        = declare_parameter<double>("standard.angle_limit", 10.0);
+    linear_speed_limit = declare_parameter<double>("standard.linear_speed_limit", 1.2);
+    angle_speed_limit  = declare_parameter<double>("standard.angle_speed_limit", 10.0);
+    linear_acc         = declare_parameter<double>("standard.linear_acceleration", 0.2);
+    angle_acc          = declare_parameter<double>("standard.angular_acceleration", 0.3924);
 
-    z1 = declare_parameter<double>("geometry.z1", 0.0);
-    z2 = declare_parameter<double>("geometry.z2", 0.15);
-    r1 = declare_parameter<double>("geometry.r1", 0.28);
-    r2 = declare_parameter<double>("geometry.r2", 0.38);
+    x     = declare_parameter<double>("standard.initial_state.x", 0.0);
+    y     = declare_parameter<double>("standard.initial_state.y", -5.0);
+    yaw   = declare_parameter<double>("standard.initial_state.yaw", 0.1);
+    x_v   = declare_parameter<double>("standard.initial_state.x_velocity", 0.0);
+    y_v   = declare_parameter<double>("standard.initial_state.y_velocity", -0.8);
+    yaw_v = declare_parameter<double>("standard.initial_state.yaw_velocity", 6.0);
+    x_a   = declare_parameter<double>("standard.initial_state.x_acceleration", 0.0);
+    y_a   = declare_parameter<double>("standard.initial_state.y_acceleration", 0.0);
+    yaw_a = declare_parameter<double>("standard.initial_state.yaw_acceleration", 0.1);
 
-    radial_min_    = declare_parameter<double>("radial_min", 3.0);
-    radial_max_    = declare_parameter<double>("radial_max", 7.0);
-    process_noise_xy_  = declare_parameter<double>("process_noise_xy", 0.1);
-    process_noise_yaw_ = declare_parameter<double>("process_noise_yaw", 0.5);
-    noise_seed_        = declare_parameter<int>("process_noise_seed", 42);
+    z1 = declare_parameter<double>("standard.geometry.z1", 0.0);
+    z2 = declare_parameter<double>("standard.geometry.z2", 0.15);
+    r1 = declare_parameter<double>("standard.geometry.r1", 0.28);
+    r2 = declare_parameter<double>("standard.geometry.r2", 0.38);
+    body_roll_ = declare_parameter<double>("standard.body_roll", 0.0);
+    body_pitch_ = declare_parameter<double>("standard.body_pitch", 0.0);
+
+    outpost_config_.center.x() =
+        declare_parameter<double>("outpost.center.x", outpost_config_.center.x());
+    outpost_config_.center.y() =
+        declare_parameter<double>("outpost.center.y", outpost_config_.center.y());
+    outpost_config_.center.z() =
+        declare_parameter<double>("outpost.center.z", outpost_config_.center.z());
+    outpost_config_.body_roll =
+        declare_parameter<double>("outpost.body_roll", outpost_config_.body_roll);
+    outpost_config_.body_pitch =
+        declare_parameter<double>("outpost.body_pitch", outpost_config_.body_pitch);
+    outpost_config_.geometry.radius =
+        declare_parameter<double>("outpost.radius", outpost_config_.geometry.radius);
+    outpost_config_.geometry.dz_1 =
+        declare_parameter<double>("outpost.dz_1", outpost_config_.geometry.dz_1);
+    outpost_config_.geometry.dz_2 =
+        declare_parameter<double>("outpost.dz_2", outpost_config_.geometry.dz_2);
+    outpost_config_.geometry.armor_pitch =
+        declare_parameter<double>("outpost.armor_pitch", outpost_config_.geometry.armor_pitch);
+    outpost_config_.angular_velocity =
+        declare_parameter<double>("outpost.angular_velocity", outpost_config_.angular_velocity);
+    if (mode_ == "outpost") {
+        x = outpost_config_.center.x();
+        y = outpost_config_.center.y();
+        z1 = outpost_config_.center.z();
+        yaw = outpost_config_.initial_yaw;
+        yaw_v = outpost_config_.angular_velocity;
+        x_v = 0.0;
+        y_v = 0.0;
+        x_a = 0.0;
+        y_a = 0.0;
+        yaw_a = 0.0;
+    }
+
+    radial_min_    = declare_parameter<double>("standard.radial_min", 3.0);
+    radial_max_    = declare_parameter<double>("standard.radial_max", 7.0);
+    process_noise_xy_  = declare_parameter<double>("standard.process_noise_xy", 0.1);
+    process_noise_yaw_ = declare_parameter<double>("standard.process_noise_yaw", 0.5);
+    noise_seed_        = declare_parameter<int>("standard.process_noise_seed", 42);
     rng_ = std::mt19937(noise_seed_);
     accel_noise_dist_  = std::normal_distribution<double>(0.0, 1.0);
 
     // ═══════════════════════════════════════════════════════
     // 相机模型 (内参固定, 外参每帧从 TF 更新)
     // ═══════════════════════════════════════════════════════
-    CameraIntrinsics intr;
-    intr.fx           = declare_parameter<double>("camera_fx", 2411.0);
-    intr.fy           = declare_parameter<double>("camera_fy", 2411.0);
-    intr.cx           = declare_parameter<double>("camera_cx", 720.0);
-    intr.cy           = declare_parameter<double>("camera_cy", 640.0);
-    intr.k1           = declare_parameter<double>("camera_k1", -0.093);
-    intr.k2           = declare_parameter<double>("camera_k2", 0.154);
-    intr.p1           = declare_parameter<double>("camera_p1", 0.0001);
-    intr.p2           = declare_parameter<double>("camera_p2", -0.0006);
-    intr.image_width  = declare_parameter<int>("image_width", 1920);
-    intr.image_height = declare_parameter<int>("image_height", 1440);
+    // 内参只从 CameraInfo YAML 读取，和 autoaim detector 保持同一配置入口。
+    // CameraInfoManager 保存为成员，避免构造阶段结束后管理器生命周期结束。
+    auto camera_info = loadCameraIntrinsicsFromCameraInfo(*this);
+    CameraIntrinsics intr = camera_info.intrinsics;
+    camera_name_ = camera_info.camera_name;
+    camera_info_manager_ = std::move(camera_info.manager);
     image_width_  = intr.image_width;
     image_height_ = intr.image_height;
     cx_ = intr.cx;
@@ -70,29 +102,21 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
     // ═══════════════════════════════════════════════════════
     // 噪声模型
     // ═══════════════════════════════════════════════════════
-    DetectionNoiseParams noise_params;
-    noise_params.pixel_noise_optimal          = declare_parameter<double>("pixel_noise_optimal", 1.5);
-    noise_params.pixel_noise_optimal_distance = declare_parameter<double>("pixel_noise_optimal_distance", 5.0);
-    noise_params.pixel_noise_curvature        = declare_parameter<double>("pixel_noise_curvature", 0.125);
-    noise_params.pixel_noise_common_ratio     = declare_parameter<double>("pixel_noise_common_ratio", 0.7);
-    noise_params.use_outliers                 = declare_parameter<bool>("use_outliers", true);
-    noise_params.outlier_probability          = declare_parameter<double>("outlier_probability", 0.05);
-    noise_params.outlier_std                  = declare_parameter<double>("outlier_std", 10.0);
-    noise_params.min_detectable_area          = declare_parameter<double>("min_detectable_area", 100.0);
-    noise_params.max_detectable_distance      = declare_parameter<double>("max_detectable_distance", 8.0);
-    noise_params.detection_probability        = declare_parameter<double>("detection_probability", 0.95);
-    noise_params.miss_probability             = declare_parameter<double>("miss_probability", 0.05);
-    noise_model_ = std::make_unique<DetectionNoise>(noise_params,
-        declare_parameter<int>("noise_seed", 42));
-    pixel_noise_enabled_ = declare_parameter<bool>("pixel_noise_enabled", true);
+    // 像素噪声/离群点/检测概率与 rune_simulation 共用同一套参数语义；
+    // 节点可在 YAML 中覆盖 pixel_noise_optimal/curvature 来表达目标差异。
+    const auto noise_config = loadDetectionNoiseConfig(*this);
+    const auto& noise_params = noise_config.params;
+    noise_model_ = std::make_unique<DetectionNoise>(noise_params, noise_config.seed);
+    pixel_noise_enabled_ = noise_config.pixel_noise_enabled;
     enemy_color_ = declare_parameter<std::string>("enemy_color", "blue");
-    publish_image_ = declare_parameter<bool>("publish_image", false);
-    publish_gimbal_gt_ = declare_parameter<bool>("publish_gimbal_gt", false);
+    const auto image_params = loadImagePublishParams(*this);
+    publish_image_ = image_params.publish_image;
+    publish_gimbal_gt_ = image_params.publish_gimbal_gt;
     img_disp_.ground_truth = declare_parameter<bool>("image_show_ground_truth", true);
     img_disp_.noisy        = declare_parameter<bool>("image_show_noisy", true);
     img_disp_.labels       = declare_parameter<bool>("image_show_labels", true);
     img_disp_.crosshair    = declare_parameter<bool>("image_show_crosshair", true);
-    img_disp_.resize_scale = declare_parameter<double>("image_resize_scale", 1.0);
+    img_disp_.resize_scale = image_params.image_resize_scale;
 
     // ═══════════════════════════════════════════════════════
     // ROS2 接口
@@ -139,6 +163,12 @@ ArmorSimulation::ArmorSimulation(const rclcpp::NodeOptions & options)
         1000ms / publish_rate, std::bind(&ArmorSimulation::publishSimulation, this));
 
     RCLCPP_INFO(get_logger(), "Armor simulation initialized (camera pose from TF)");
+    RCLCPP_INFO(get_logger(), "  Mode: %s", mode_.c_str());
+    if (mode_ == "outpost") {
+        RCLCPP_INFO(get_logger(),
+            "  Outpost motion: fixed center=(%.2f, %.2f, %.2f), yaw=%.3f*t rad",
+            x, y, z1, outpost_config_.angular_velocity);
+    }
     RCLCPP_INFO(get_logger(), "  Camera: fx=%.1f fy=%.1f cx=%.1f cy=%.1f %dx%d",
                 intr.fx, intr.fy, intr.cx, intr.cy, image_width_, image_height_);
     RCLCPP_INFO(get_logger(), "  Noise: sigma(d)=%.1f+%.3f*(d-%.1f)^2, outliers=%s(%d%%@%.0fpx)",
@@ -154,6 +184,7 @@ void ArmorSimulation::publishSimulation() {
     rclcpp::Time now = this->now();
     double dt = std::min((now - last_t).seconds(), 1.0);
     last_t = now;
+    const bool outpost_mode = mode_ == "outpost";
 
     // ── 仿真图像画布 (持久化缓冲区, 按需重建) ──
     if (publish_image_ && (sim_image_.empty() ||
@@ -164,20 +195,36 @@ void ArmorSimulation::publishSimulation() {
         sim_image_ = cv::Scalar(30, 30, 30);  // 清空为深灰背景
     }
 
-    // ── 过程噪声 ──
-    double dt_safe = (dt > 1e-9) ? dt : 0.01;
-    double ax_noise = std::sqrt(process_noise_xy_ / dt_safe) * accel_noise_dist_(rng_);
-    double ay_noise = std::sqrt(process_noise_xy_ / dt_safe) * accel_noise_dist_(rng_);
-    double ayaw_noise = std::sqrt(process_noise_yaw_ / dt_safe) * accel_noise_dist_(rng_);
-    double ax_eff = x_a + ax_noise, ay_eff = y_a + ay_noise, ayaw_eff = yaw_a + ayaw_noise;
+    if (outpost_mode) {
+        outpost_elapsed_time_ += std::max(0.0, dt);
+        const auto motion_state =
+            computeOutpostMotionState(outpostMotionConfig(outpost_config_), outpost_elapsed_time_);
+        x = motion_state.center.x();
+        y = motion_state.center.y();
+        z1 = motion_state.center.z();
+        yaw = motion_state.yaw;
+        x_v = 0.0;
+        y_v = 0.0;
+        yaw_v = motion_state.angular_velocity;
+        x_a = 0.0;
+        y_a = 0.0;
+        yaw_a = 0.0;
+    } else {
+        // ── 普通装甲板过程噪声 ──
+        double dt_safe = (dt > 1e-9) ? dt : 0.01;
+        double ax_noise = std::sqrt(process_noise_xy_ / dt_safe) * accel_noise_dist_(rng_);
+        double ay_noise = std::sqrt(process_noise_xy_ / dt_safe) * accel_noise_dist_(rng_);
+        double ayaw_noise = std::sqrt(process_noise_yaw_ / dt_safe) * accel_noise_dist_(rng_);
+        double ax_eff = x_a + ax_noise, ay_eff = y_a + ay_noise, ayaw_eff = yaw_a + ayaw_noise;
 
-    // ── 运动更新 ──
-    x   += x_v * dt + 0.5 * ax_eff * dt * dt;
-    y   += y_v * dt + 0.5 * ay_eff * dt * dt;
-    yaw += yaw_v * dt + 0.5 * ayaw_eff * dt * dt;
-    x_v   += ax_eff * dt;
-    y_v   += ay_eff * dt;
-    yaw_v += ayaw_eff * dt;
+        // ── 普通装甲板运动更新 ──
+        x   += x_v * dt + 0.5 * ax_eff * dt * dt;
+        y   += y_v * dt + 0.5 * ay_eff * dt * dt;
+        yaw += yaw_v * dt + 0.5 * ayaw_eff * dt * dt;
+        x_v   += ax_eff * dt;
+        y_v   += ay_eff * dt;
+        yaw_v += ayaw_eff * dt;
+    }
 
     // ── 从 TF 获取相机外参 (由 gimbal_simulation 节点动态更新) ──
     // 同时提取相机在 odom 系的位置 (用于正确的朝向过滤)
@@ -211,7 +258,7 @@ void ArmorSimulation::publishSimulation() {
     marker_array_.markers.clear();
 
     // 每帧先删全部 obs marker (配合 0.1s lifetime 双保险), 再 ADD 可见的
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         obs_marker_.id = i;
         obs_marker_.action = visualization_msgs::msg::Marker::DELETE;
         marker_array_.markers.push_back(obs_marker_);
@@ -223,8 +270,15 @@ void ArmorSimulation::publishSimulation() {
 
     // ── 第一遍: 收集全部装甲板信息 + GT marker ──
     struct ArmorInfo {
-        int idx; double armor_yaw; Eigen::Vector3d pos;
-        Eigen::Quaterniond orient; double dist_cam; bool on_camera_side;
+        int idx;
+        std::string number;
+        double armor_yaw;
+        Eigen::Vector3d pos;
+        Eigen::Quaterniond orient;
+        double width = SMALL_ARMOR_WIDTH;
+        double height = SMALL_ARMOR_HEIGHT;
+        double dist_cam;
+        bool on_camera_side;
         std::array<Eigen::Vector2d, 4> corners_px;
         bool corners_valid = false;  // 全部角点投影有效
     };
@@ -234,49 +288,92 @@ void ArmorSimulation::publishSimulation() {
     double yaw_center_to_cam = std::atan2(
         camera_pos_odom.y() - y, camera_pos_odom.x() - x);
 
-    for (int i = 0; i < 4; i++) {
-        double armor_yaw = yaw + i * M_PI_2;
-        double r  = (i % 2 == 0) ? r1 : r2;
-        double dz = (i % 2 == 0) ? 0.0 : (z2 - z1);
-        Eigen::Vector3d pos(x - cos(armor_yaw) * r, y - sin(armor_yaw) * r, z1 + dz);  // center - r*(cos,sin) 对齐 jlu
-        double dist_cam = (pos - camera_pos_odom).norm();
+    if (mode_ == "outpost") {
+        const Eigen::Matrix3d body_rotation = outpostBodyRotation(outpost_config_);
+        const auto plates = computeOutpostPlates(
+            Eigen::Vector3d(x, y, z1), yaw, body_rotation, outpost_config_.geometry);
+        for (const auto& plate : plates) {
+            const double yaw_center_to_armor = std::atan2(
+                plate.position.y() - y, plate.position.x() - x);
+            const double angle_diff = std::abs(
+                angles::shortest_angular_distance(yaw_center_to_armor, yaw_center_to_cam));
+            armors_info.push_back({
+                plate.index,
+                "outpost",
+                plate.yaw,
+                plate.position,
+                plate.orientation,
+                SMALL_ARMOR_WIDTH,
+                SMALL_ARMOR_HEIGHT,
+                (plate.position - camera_pos_odom).norm(),
+                angle_diff <= M_PI / 3.0,
+                {},
+                false});
+        }
+    } else {
+        if (mode_ != "standard") {
+            RCLCPP_WARN_THROTTLE(
+                get_logger(), *get_clock(), 2000,
+                "Unknown armor simulation mode '%s', falling back to standard", mode_.c_str());
+        }
+        for (int i = 0; i < 4; i++) {
+            const double armor_yaw = yaw + i * M_PI_2;
+            const double r  = (i % 2 == 0) ? r1 : r2;
+            const double dz = (i % 2 == 0) ? 0.0 : (z2 - z1);
+            const Eigen::Vector3d pos(
+                x - std::cos(armor_yaw) * r,
+                y - std::sin(armor_yaw) * r,
+                z1 + dz);
 
-        // 中心→装甲板方向 = armor_yaw + π (pos = center - r*n, 对齐 jlu)
-        double yaw_center_to_armor = angles::normalize_angle(armor_yaw + M_PI);
-        double angle_diff = std::abs(
-            angles::shortest_angular_distance(yaw_center_to_armor, yaw_center_to_cam));
-        bool on_camera_side = angle_diff <= M_PI / 3.0;  // ±60°
+            // 中心→装甲板方向 = armor_yaw + π (pos = center - r*n, 对齐 jlu)
+            const double yaw_center_to_armor = angles::normalize_angle(armor_yaw + M_PI);
+            const double angle_diff = std::abs(
+                angles::shortest_angular_distance(yaw_center_to_armor, yaw_center_to_cam));
 
-        // 装甲板方向
-        tf2::Quaternion tf_q;
-        tf_q.setRPY(0, 15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
-        Eigen::Quaterniond orient(tf_q.w(), tf_q.x(), tf_q.y(), tf_q.z());
+            tf2::Quaternion tf_q;
+            tf_q.setRPY(0, 15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
+            const Eigen::Quaterniond orient(tf_q.w(), tf_q.x(), tf_q.y(), tf_q.z());
 
-        // 投影角点 (与检测使用相同约定: computeArmorCorners)
-        std::array<Eigen::Vector2d, 4> corners_px;
-        bool corners_valid = false;
+            armors_info.push_back({
+                i,
+                "4",
+                armor_yaw,
+                pos,
+                orient,
+                SMALL_ARMOR_WIDTH,
+                SMALL_ARMOR_HEIGHT,
+                (pos - camera_pos_odom).norm(),
+                angle_diff <= M_PI / 3.0,
+                {},
+                false});
+        }
+    }
+
+    for (auto& info : armors_info) {
         if (publish_image_) {
-            auto gt_corners = computeArmorCorners(pos, orient, SMALL_ARMOR_WIDTH, SMALL_ARMOR_HEIGHT);
-            corners_valid = true;
+            auto gt_corners = computeArmorCorners(
+                info.pos, info.orient, info.width, info.height);
+            info.corners_valid = true;
             for (int j = 0; j < 4; j++) {
-                corners_px[j] = camera_model_.project3Dto2D(gt_corners[j]);
-                if (!camera_model_.isInImage(corners_px[j], 0.0))
-                    corners_valid = false;
+                info.corners_px[j] = camera_model_.project3Dto2D(gt_corners[j]);
+                if (!camera_model_.isInImage(info.corners_px[j], 0.0)) {
+                    info.corners_valid = false;
+                }
             }
         }
 
-        armors_info.push_back({i, armor_yaw, pos, orient, dist_cam,
-                               on_camera_side, corners_px, corners_valid});
-
         // GT marker (始终显示)
-        gt_marker_.id = i;
+        gt_marker_.id = info.idx;
         gt_marker_.action = visualization_msgs::msg::Marker::ADD;
         gt_marker_.header.stamp = now;
         gt_marker_.header.frame_id = "odom";
-        gt_marker_.pose.position.x = pos.x();
-        gt_marker_.pose.position.y = pos.y();
-        gt_marker_.pose.position.z = pos.z();
-        gt_marker_.pose.orientation = tf2::toMsg(tf_q);
+        gt_marker_.pose.position.x = info.pos.x();
+        gt_marker_.pose.position.y = info.pos.y();
+        gt_marker_.pose.position.z = info.pos.z();
+        gt_marker_.pose.orientation.x = info.orient.x();
+        gt_marker_.pose.orientation.y = info.orient.y();
+        gt_marker_.pose.orientation.z = info.orient.z();
+        gt_marker_.pose.orientation.w = info.orient.w();
         marker_array_.markers.push_back(gt_marker_);
     }
 
@@ -334,8 +431,8 @@ void ArmorSimulation::publishSimulation() {
         double distance = info->dist_cam;
 
 
-        double width  = SMALL_ARMOR_WIDTH;
-        double height = SMALL_ARMOR_HEIGHT;
+        double width  = info->width;
+        double height = info->height;
         auto corners = computeArmorCorners(pos, info->orient, width, height);
         double area = camera_model_.computeArea(corners);
 
@@ -365,10 +462,11 @@ void ArmorSimulation::publishSimulation() {
         if (!pnp.success) continue;
 
         auto_aim_interfaces::msg::Armor armor;
-        armor.number = "4";
+        armor.number = info->number;
         armor.type = "small";
-        armor.color = "blue";
+        armor.color = enemy_color_;
         armor.area = area;
+        armor.priority = -1;
         armor.pose.position.x = pnp.position_odom.x();
         armor.pose.position.y = pnp.position_odom.y();
         armor.pose.position.z = pnp.position_odom.z();
@@ -397,9 +495,10 @@ void ArmorSimulation::publishSimulation() {
         obs_marker_.pose.position.x = pos.x();
         obs_marker_.pose.position.y = pos.y();
         obs_marker_.pose.position.z = pos.z();
-        tf2::Quaternion tf_q;
-        tf_q.setRPY(0, 15.0 * M_PI / 180.0, angles::normalize_angle(armor_yaw));
-        obs_marker_.pose.orientation = tf2::toMsg(tf_q);
+        obs_marker_.pose.orientation.x = info->orient.x();
+        obs_marker_.pose.orientation.y = info->orient.y();
+        obs_marker_.pose.orientation.z = info->orient.z();
+        obs_marker_.pose.orientation.w = info->orient.w();
         marker_array_.markers.push_back(obs_marker_);
 
         // 仿真图像绘制
@@ -510,31 +609,33 @@ void ArmorSimulation::publishSimulation() {
         gimbal_pub_->publish(send_msg);
     }
 
-    // ── 运动限幅 ──
-    constexpr double eps = 1e-6;
-    if (std::abs(x_v) > linear_speed_limit && linear_speed_limit != -1)
-        x_v = x_v / (std::abs(x_v) + eps) * linear_speed_limit;
-    if (std::abs(y_v) > linear_speed_limit && linear_speed_limit != -1)
-        y_v = y_v / (std::abs(y_v) + eps) * linear_speed_limit;
-    if (std::abs(yaw_v) > angle_speed_limit && angle_speed_limit != -1)
-        yaw_v = yaw_v / (std::abs(yaw_v) + eps) * angle_speed_limit;
+    if (!outpost_mode) {
+        // ── 普通装甲板运动限幅 ──
+        constexpr double eps = 1e-6;
+        if (std::abs(x_v) > linear_speed_limit && linear_speed_limit != -1)
+            x_v = x_v / (std::abs(x_v) + eps) * linear_speed_limit;
+        if (std::abs(y_v) > linear_speed_limit && linear_speed_limit != -1)
+            y_v = y_v / (std::abs(y_v) + eps) * linear_speed_limit;
+        if (std::abs(yaw_v) > angle_speed_limit && angle_speed_limit != -1)
+            yaw_v = yaw_v / (std::abs(yaw_v) + eps) * angle_speed_limit;
 
-    // ── 径向边界 (和 linear_limit 一样的直接反向) ──
-    double r_now = std::sqrt(x*x + y*y);
-    if (r_now > radial_max_) {
-        if (std::abs(x) > eps) x_a = -x / (std::abs(x) + eps) * linear_acc;
-        if (std::abs(y) > eps) y_a = -y / (std::abs(y) + eps) * linear_acc;
-    } else if (r_now < radial_min_ && r_now > eps) {
-        if (std::abs(x) > eps) x_a = x / (std::abs(x) + eps) * linear_acc;
-        if (std::abs(y) > eps) y_a = y / (std::abs(y) + eps) * linear_acc;
+        // ── 径向边界 (和 linear_limit 一样的直接反向) ──
+        double r_now = std::sqrt(x*x + y*y);
+        if (r_now > radial_max_) {
+            if (std::abs(x) > eps) x_a = -x / (std::abs(x) + eps) * linear_acc;
+            if (std::abs(y) > eps) y_a = -y / (std::abs(y) + eps) * linear_acc;
+        } else if (r_now < radial_min_ && r_now > eps) {
+            if (std::abs(x) > eps) x_a = x / (std::abs(x) + eps) * linear_acc;
+            if (std::abs(y) > eps) y_a = y / (std::abs(y) + eps) * linear_acc;
+        }
+
+        if (std::abs(x) > linear_limit && linear_limit != -1)
+            x_a = -x / (std::abs(x) + eps) * linear_acc;
+        if (std::abs(y) > linear_limit && linear_limit != -1)
+            y_a = -y / (std::abs(y) + eps) * linear_acc;
+        if (std::abs(yaw) > angle_limit && angle_limit != -1)
+            yaw_a = -yaw / (std::abs(yaw) + eps) * angle_acc;
     }
-
-    if (std::abs(x) > linear_limit && linear_limit != -1)
-        x_a = -x / (std::abs(x) + eps) * linear_acc;
-    if (std::abs(y) > linear_limit && linear_limit != -1)
-        y_a = -y / (std::abs(y) + eps) * linear_acc;
-    if (std::abs(yaw) > angle_limit && angle_limit != -1)
-        yaw_a = -yaw / (std::abs(yaw) + eps) * angle_acc;
 }
 
 }  // namespace armor_sim

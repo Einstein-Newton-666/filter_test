@@ -41,32 +41,195 @@ double sigmaFromVariance(double variance) {
     return std::sqrt(std::max(variance, 1e-12));
 }
 
-TrackerState initialStateFromFirstArmor(
+double outpostBaseZ(const TrackerState& state) {
+    return std::isfinite(state.outpost_base_z)
+        ? state.outpost_base_z
+        : state.center.z();
+}
+
+Eigen::Vector2d outpostBaseXY(const TrackerState& state) {
+    return (std::isfinite(state.outpost_base_xy.x()) &&
+            std::isfinite(state.outpost_base_xy.y()))
+        ? state.outpost_base_xy
+        : state.center.head<2>();
+}
+
+int observedOutpostSlot(double base_yaw, double armor_yaw) {
+    double delta = auto_graph::normalizeAngle(armor_yaw - base_yaw);
+    if (delta < 0.0) {
+        delta += 2.0 * M_PI;
+    }
+    const double slot_width = 2.0 * M_PI / 3.0;
+    return static_cast<int>(std::llround(delta / slot_width)) % 3;
+}
+
+std::size_t selectOutpostBaseObservation(
     const auto_aim_interfaces::msg::Armors& msg) {
+    std::size_t best_index = 0;
+    double best_abs_yaw = std::numeric_limits<double>::max();
+    for (std::size_t i = 0; i < msg.armors.size(); ++i) {
+        const auto& armor = msg.armors[i];
+        if (armor.number != "outpost") {
+            continue;
+        }
+        const double abs_yaw = std::abs(auto_graph::normalizeAngle(armor.yaw));
+        if (abs_yaw < best_abs_yaw) {
+            best_abs_yaw = abs_yaw;
+            best_index = i;
+        }
+    }
+    return best_index;
+}
+
+void initializeOutpostDzFromObservations(
+    TrackerState& state,
+    const auto_aim_interfaces::msg::Armors& msg,
+    std::size_t base_index) {
+    state.dz = 0.0;
+    state.outpost_dz_2 = 0.0;
+    if (msg.armors.empty() || base_index >= msg.armors.size()) {
+        return;
+    }
+
+    const auto& base = msg.armors[base_index];
+    const double base_z = base.pose.position.z;
+    std::array<bool, 3> seen = {true, false, false};
+    for (std::size_t i = 0; i < msg.armors.size(); ++i) {
+        if (i == base_index) {
+            continue;
+        }
+        const auto& armor = msg.armors[i];
+        if (armor.number != "outpost") {
+            continue;
+        }
+        const int slot = observedOutpostSlot(base.yaw, armor.yaw);
+        if (slot <= 0 || seen[static_cast<std::size_t>(slot)]) {
+            continue;
+        }
+        seen[static_cast<std::size_t>(slot)] = true;
+        const double dz = armor.pose.position.z - base_z;
+        if (slot == 1) {
+            state.dz = dz;
+        } else if (slot == 2) {
+            state.outpost_dz_2 = dz;
+        }
+    }
+}
+
+int outpostObservationCount(const auto_aim_interfaces::msg::Armors& msg) {
+    return static_cast<int>(std::count_if(
+        msg.armors.begin(), msg.armors.end(),
+        [](const auto_aim_interfaces::msg::Armor& armor) {
+            return armor.number == "outpost";
+        }));
+}
+
+std::pair<int, double> matchOutpostSlotByYaw(
+    const TrackerState& hint,
+    const auto_aim_interfaces::msg::Armor& armor) {
+    int best_slot = 0;
+    double best_diff = std::numeric_limits<double>::max();
+    for (int slot = 0; slot < 3; ++slot) {
+        const double predicted_yaw =
+            hint.yaw + armorYawOffset(slot, 3);
+        const double diff = std::abs(
+            auto_graph::shortestAngularDistance(predicted_yaw, armor.yaw));
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_slot = slot;
+        }
+    }
+    return {best_slot, best_diff};
+}
+
+double outpostDzForSlot(const TrackerState& state, int slot) {
+    if (slot == 1) {
+        return state.dz;
+    }
+    if (slot == 2) {
+        return state.outpost_dz_2;
+    }
+    return 0.0;
+}
+
+TrackerState initialStateFromFirstArmor(
+    const auto_aim_interfaces::msg::Armors& msg,
+    const TrackerConfig& config,
+    const TrackerState* outpost_reinit_hint) {
     TrackerState state;
     if (msg.armors.empty()) {
         return state;
     }
-    const auto& armor = msg.armors.front();
-    constexpr double init_radius = 0.25;
+    const bool outpost = std::any_of(
+        msg.armors.begin(), msg.armors.end(),
+        [](const auto_aim_interfaces::msg::Armor& armor) {
+            return armor.number == "outpost";
+        });
+    const std::size_t base_index =
+        outpost ? selectOutpostBaseObservation(msg) : 0;
+    const auto& armor = msg.armors[base_index];
+    const double init_radius = outpost ? config.outpost_radius : 0.25;
+    const bool has_outpost_reinit_hint =
+        outpost && outpost_reinit_hint != nullptr &&
+        outpost_reinit_hint->armor_count == 3 &&
+        outpostObservationCount(msg) == 1;
+    int init_outpost_slot = 0;
+    bool has_init_outpost_slot = false;
+    bool use_reinit_geometry = false;
+    if (has_outpost_reinit_hint) {
+        const auto [slot, yaw_diff] = matchOutpostSlotByYaw(
+            *outpost_reinit_hint, armor);
+        if (yaw_diff <= config.match_max_cost) {
+            init_outpost_slot = slot;
+            has_init_outpost_slot = true;
+            use_reinit_geometry = true;
+        }
+    }
+    double init_yaw = armor.yaw;
+    if (outpost && has_init_outpost_slot) {
+        const double raw_center_yaw =
+            armor.yaw - armorYawOffset(init_outpost_slot, 3);
+        init_yaw = has_outpost_reinit_hint
+            ? outpost_reinit_hint->yaw +
+                  auto_graph::shortestAngularDistance(
+                      outpost_reinit_hint->yaw, raw_center_yaw)
+            : raw_center_yaw;
+    }
     // 装甲板位置 = center - r * normal，因此反推 center 时沿 armor yaw 正方向加半径。
     state.center = {
         armor.pose.position.x + init_radius * std::cos(armor.yaw),
         armor.pose.position.y + init_radius * std::sin(armor.yaw),
-        armor.pose.position.z};
+        armor.pose.position.z -
+            (use_reinit_geometry
+                 ? outpostDzForSlot(*outpost_reinit_hint, init_outpost_slot)
+                 : 0.0)};
     state.velocity.setZero();
-    state.yaw = armor.yaw;
-    state.vyaw = 0.0;
+    state.yaw = init_yaw;
+    state.vyaw = outpost ? config.outpost_initial_vyaw : 0.0;
     state.radius_1 = init_radius;
     state.radius_2 = init_radius;
     state.dz = 0.0;
+    state.outpost_dz_2 = 0.0;
+    state.armor_count = outpost ? 3 : 4;
+    state.outpost_base_xy = outpost ? state.center.head<2>() : state.outpost_base_xy;
+    state.outpost_base_z = outpost ? state.center.z() : state.outpost_base_z;
+    if (use_reinit_geometry) {
+        state.dz = outpost_reinit_hint->dz;
+        state.outpost_dz_2 = outpost_reinit_hint->outpost_dz_2;
+        state.outpost_base_xy = outpostBaseXY(*outpost_reinit_hint);
+        state.outpost_base_z = outpostBaseZ(*outpost_reinit_hint);
+        return state;
+    }
+    if (outpost) {
+        initializeOutpostDzFromObservations(state, msg, base_index);
+    }
     return state;
 }
 
 gtsam::Key armorPoseKey(uint64_t frame_id, int armor_index) {
     // 每个物理装甲板槽位独立 prefix，frame id 仍表示时间。
-    static constexpr char prefixes[] = {'h', 'j', 'k', 'l'};
-    const int clamped_index = std::max(0, std::min(armor_index, 3));
+    static constexpr char prefixes[] = {'h', 'j', 'k', 'l', 'm'};
+    const int clamped_index = std::max(0, std::min(armor_index, 4));
     return gtsam::Symbol(prefixes[clamped_index], frame_id);
 }
 
@@ -95,19 +258,42 @@ gtsam::Pose3 armorPoseCameraFromObservation(
 
 double armorMatchCost(const PredictedArmor& predicted,
                       const auto_aim_interfaces::msg::Armor& observed,
-                      int last_armor_index) {
+                      int last_armor_index,
+                      bool use_position_error) {
     const double yaw_diff =
         std::abs(auto_graph::shortestAngularDistance(predicted.yaw, observed.yaw));
+    double cost = yaw_diff;
+    if (use_position_error) {
+        const double dx = observed.pose.position.x - predicted.position.x();
+        const double dy = observed.pose.position.y - predicted.position.y();
+        const double dz_err = observed.pose.position.z - predicted.position.z();
+        const double pos_err = std::sqrt(dx * dx + dy * dy + dz_err * dz_err);
+
+        // yaw_diff 单位是 rad，pos_err 单位是 m。这里的 3.0 是经验权重，
+        // 让 0.1 m 位置误差大致等价于 0.3 rad yaw 误差。
+        cost += 3.0 * pos_err;
+    }
+    if (predicted.index == last_armor_index) cost *= 0.85;
+    return cost;
+}
+
+double outpostArmorMatchCost(
+    const TrackerState& state,
+    const PredictedArmor& predicted,
+    const auto_aim_interfaces::msg::Armor& observed,
+    int last_armor_index) {
+    (void)state;
+    (void)last_armor_index;
+    const double yaw_diff =
+        std::abs(auto_graph::shortestAngularDistance(
+            predicted.yaw, observed.yaw));
+
     const double dx = observed.pose.position.x - predicted.position.x();
     const double dy = observed.pose.position.y - predicted.position.y();
     const double dz_err = observed.pose.position.z - predicted.position.z();
     const double pos_err = std::sqrt(dx * dx + dy * dy + dz_err * dz_err);
 
-    // yaw_diff 单位是 rad，pos_err 单位是 m。这里的 3.0 是经验权重，
-    // 让 0.1 m 位置误差大致等价于 0.3 rad yaw 误差。
-    double cost = yaw_diff + 3.0 * pos_err;
-    if (predicted.index == last_armor_index) cost *= 0.85;
-    return cost;
+    return yaw_diff + 3.0 * pos_err;
 }
 
 Eigen::Matrix<double, 4, 6> armorPoseGeometryJacobian(
@@ -142,7 +328,222 @@ Eigen::Matrix<double, 4, 6> armorPoseGeometryJacobian(
     return H1;
 }
 
+Eigen::Vector2d projectPoint(
+    const Eigen::Vector3d& point_camera,
+    const Eigen::Matrix3d& K,
+    const std::array<double, 5>& dist) {
+    const double z = std::abs(point_camera.z()) > 1e-9 ? point_camera.z() : 1e-9;
+    double x = point_camera.x() / z;
+    double y = point_camera.y() / z;
+    const double r2 = x * x + y * y;
+    const double radial =
+        1.0 + dist[0] * r2 + dist[1] * r2 * r2 + dist[4] * r2 * r2 * r2;
+    const double x_distorted =
+        x * radial + 2.0 * dist[2] * x * y + dist[3] * (r2 + 2.0 * x * x);
+    const double y_distorted =
+        y * radial + dist[2] * (r2 + 2.0 * y * y) + 2.0 * dist[3] * x * y;
+    return Eigen::Vector2d(
+        K(0, 0) * x_distorted + K(0, 1) * y_distorted + K(0, 2),
+        K(1, 1) * y_distorted + K(1, 2));
+}
+
+template<typename ErrorFunc>
+gtsam::Matrix finiteDiffColumns(int rows, int cols, ErrorFunc&& func) {
+    constexpr double eps = 1e-6;
+    const gtsam::Vector base = func(gtsam::Vector::Zero(cols));
+    gtsam::Matrix H(rows, cols);
+    for (int col = 0; col < cols; ++col) {
+        gtsam::Vector delta = gtsam::Vector::Zero(cols);
+        delta(col) = eps;
+        H.col(col) = (func(delta) - base) / eps;
+    }
+    return H;
+}
+
+double armorInclinedToCamera(
+    double center_yaw,
+    int armor_index,
+    double armor_pitch,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    int armor_count = 4) {
+    const double armor_yaw = center_yaw + armorYawOffset(armor_index, armor_count);
+    const Eigen::Matrix3d R_armor_to_odom =
+        (Eigen::AngleAxisd(armor_yaw, Eigen::Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(armor_pitch, Eigen::Vector3d::UnitY()))
+            .toRotationMatrix();
+    const Eigen::Vector3d normal_camera =
+        T_camera_to_odom.inverse().rotation() * R_armor_to_odom.col(0);
+    return std::acos(std::clamp(std::abs(normal_camera.z()), 0.0, 1.0));
+}
+
+double edgeResidualFromCost(double cost) {
+    // auto_aim EdgeLoss 使用 cost^(1/4)。GTSAM 需要在最优点附近反复线性化，
+    // 直接四次根在 cost=0 处不可导，所以只对极小 cost 做平滑并保持零残差。
+    constexpr double eps = 1e-12;
+    return std::pow(cost + eps, 0.25) - std::pow(eps, 0.25);
+}
+
+gtsam::Vector armorEdgeLoss(
+    const std::array<Eigen::Vector2d, 4>& projected,
+    const std::array<Eigen::Vector2d, 4>& observed,
+    double inclined,
+    double slope_k) {
+    const double sin_weight = std::abs(std::sin(inclined));
+    const double cos_weight = std::abs(std::cos(inclined));
+    gtsam::Vector residual(4);
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        const Eigen::Vector2d obs_edge = observed[j] - observed[i];
+        const Eigen::Vector2d proj_edge = projected[j] - projected[i];
+        const double obs_length = obs_edge.norm();
+        if (obs_length <= 1e-6) {
+            residual[i] = 1e6;
+            continue;
+        }
+        const double proj_length = proj_edge.norm();
+        const double vertex_shift =
+            0.5 * ((projected[i] - observed[i]).norm() +
+                   (projected[j] - observed[j]).norm());
+        const double pixel_error =
+            (vertex_shift + std::abs(proj_length - obs_length)) / obs_length;
+        const double cross =
+            proj_edge.x() * obs_edge.y() - proj_edge.y() * obs_edge.x();
+        const double dot = proj_edge.dot(obs_edge);
+        const double angular_error = std::atan2(cross, dot);
+        const double cost =
+            pixel_error * pixel_error * sin_weight +
+            angular_error * angular_error * cos_weight * slope_k;
+        residual[i] = edgeResidualFromCost(std::max(cost, 0.0));
+    }
+    return residual;
+}
+
+gtsam::Vector armorEdgeYawLoss(
+    const std::array<Eigen::Vector2d, 4>& projected,
+    const std::array<Eigen::Vector2d, 4>& observed,
+    double inclined,
+    double slope_k) {
+    const double cos_weight = std::abs(std::cos(inclined));
+    gtsam::Vector residual(4);
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        const Eigen::Vector2d obs_edge = observed[j] - observed[i];
+        const Eigen::Vector2d proj_edge = projected[j] - projected[i];
+        if (obs_edge.norm() <= 1e-6 || proj_edge.norm() <= 1e-6) {
+            residual[i] = 1e6;
+            continue;
+        }
+        const double cross =
+            proj_edge.x() * obs_edge.y() - proj_edge.y() * obs_edge.x();
+        const double dot = proj_edge.dot(obs_edge);
+        const double angular_error = std::atan2(cross, dot);
+        residual[i] =
+            angular_error * std::sqrt(std::max(0.0, cos_weight * slope_k));
+    }
+    return residual;
+}
+
+std::array<Eigen::Vector2d, 4> observedArmorPixels(
+    const auto_aim_interfaces::msg::Armor& armor) {
+    std::array<Eigen::Vector2d, 4> pixels{};
+    for (int i = 0; i < 4; ++i) {
+        pixels[static_cast<std::size_t>(i)] =
+            Eigen::Vector2d(armor.detected_points[i].x, armor.detected_points[i].y);
+    }
+    return pixels;
+}
+
+double armorPoseDistance(const auto_aim_interfaces::msg::Armor& armor) {
+    const double x = armor.pose.position.x;
+    const double y = armor.pose.position.y;
+    const double z = armor.pose.position.z;
+    return std::sqrt(x * x + y * y + z * z);
+}
+
+double distanceExcess(double distance, double reference_distance) {
+    if (!std::isfinite(distance)) {
+        return 0.0;
+    }
+    return std::max(0.0, distance - std::max(0.0, reference_distance));
+}
+
+double scaledByDistance(double base, double distance, double reference_distance,
+                        double quadratic_scale) {
+    const double excess = distanceExcess(distance, reference_distance);
+    return std::max(1e-9, base * (1.0 + std::max(0.0, quadratic_scale) * excess * excess));
+}
+
+double pixelSigmaByDistance(double base, double distance, double reference_distance,
+                            double quadratic) {
+    const double excess = distanceExcess(distance, reference_distance);
+    return std::max(1e-9, base + std::max(0.0, quadratic) * excess * excess);
+}
+
 }  // namespace
+
+ObservationNoise observationNoiseForArmor(
+    const TrackerConfig& config,
+    const auto_aim_interfaces::msg::Armor& armor) {
+    return observationNoiseForArmor(config, armor, armorPoseDistance(armor));
+}
+
+ObservationNoise observationNoiseForArmor(
+    const TrackerConfig& config,
+    const auto_aim_interfaces::msg::Armor& armor,
+    double distance) {
+    const bool is_outpost = armor.number == "outpost";
+    ObservationNoise noise;
+    noise.pixel_sigma = pixelSigmaByDistance(
+        is_outpost ? config.outpost_pixel_sigma : config.pixel_sigma,
+        distance,
+        config.observation_noise_reference_distance,
+        config.pixel_sigma_distance_quadratic);
+    noise.pose_prior_sigma = scaledByDistance(
+        config.pose_prior_sigma,
+        distance,
+        config.observation_noise_reference_distance,
+        config.pose_prior_distance_scale);
+    noise.geo_noise = is_outpost ? config.outpost_geo_noise : config.geo_noise;
+    noise.geo_noise.tangential = scaledByDistance(
+        noise.geo_noise.tangential,
+        distance,
+        config.observation_noise_reference_distance,
+        config.geo_tangential_distance_scale);
+    noise.geo_noise.radial = scaledByDistance(
+        noise.geo_noise.radial,
+        distance,
+        config.observation_noise_reference_distance,
+        config.geo_radial_distance_scale);
+    noise.geo_noise.yaw = scaledByDistance(
+        noise.geo_noise.yaw,
+        distance,
+        config.observation_noise_reference_distance,
+        config.geo_yaw_distance_scale);
+    return noise;
+}
+
+MotionNoiseSigmas motionNoiseSigmasForConfig(
+    const TrackerConfig& config,
+    bool outpost_motion,
+    double dt) {
+    (void)dt;
+    const double s2qxy = outpost_motion ? config.outpost_s2qxy : config.s2qxy;
+    const double s2qz = outpost_motion ? config.outpost_s2qz : config.s2qz;
+    const double s2qyaw = outpost_motion ? config.outpost_s2qyaw : config.s2qyaw;
+    const double velocity_sigma =
+        outpost_motion ? config.outpost_vel_sigma : config.vel_sigma;
+    const double vyaw_sigma =
+        outpost_motion ? config.outpost_vyaw_sigma : config.vyaw_sigma;
+
+    MotionNoiseSigmas sigmas;
+    sigmas.center_xy = sigmaFromVariance(s2qxy);
+    sigmas.center_z = sigmaFromVariance(s2qz);
+    sigmas.yaw = sigmaFromVariance(s2qyaw);
+    sigmas.velocity_xy = std::max(1e-6, velocity_sigma);
+    sigmas.velocity_z = std::max(1e-6, velocity_sigma);
+    sigmas.vyaw = std::max(1e-6, vyaw_sigma);
+    return sigmas;
+}
 
 TranslationFactor::TranslationFactor(
     const gtsam::SharedNoiseModel& noise, gtsam::Key x_prev,
@@ -205,41 +606,85 @@ gtsam::Vector VyawFactor::evaluateError(
 
 std::vector<PredictedArmor> predictedArmorsFromState(const TrackerState& state) {
     std::vector<PredictedArmor> armors;
-    armors.reserve(4);
-    for (int i = 0; i < 4; ++i) {
+    const int armor_count = state.armor_count == 3 ? 3 : 4;
+    armors.reserve(static_cast<std::size_t>(armor_count));
+    for (int i = 0; i < armor_count; ++i) {
         // 约定与仿真一致：
         //   armor_position = center - radius * [cos(armor_yaw), sin(armor_yaw), 0]
-        // 偶数装甲板使用 radius_1 且与中心同层；奇数装甲板使用 radius_2 和 dz。
-        const double armor_yaw = state.yaw + i * M_PI_2;
-        const double radius = (i % 2 == 0) ? state.radius_1 : state.radius_2;
-        const double dz = (i % 2 == 0) ? 0.0 : state.dz;
+        // standard: 偶数用 radius_1 同层，奇数用 radius_2 和 dz。
+        // outpost: 三块 120 度分布，共用 radius_1，index 1/2 使用独立高度偏移。
+        const double armor_yaw = state.yaw + armorYawOffset(i, armor_count);
+        const bool outpost = armor_count == 3;
+        const double radius = outpost
+            ? state.radius_1
+            : ((i % 2 == 0) ? state.radius_1 : state.radius_2);
+        const double dz = outpost
+            ? (i == 0 ? 0.0 : (i == 1 ? state.dz : state.outpost_dz_2))
+            : ((i % 2 == 0) ? 0.0 : state.dz);
 
         PredictedArmor armor;
         armor.index = i;
         armor.yaw = armor_yaw;
         armor.radius = radius;
         armor.dz = dz;
-        armor.position.x() = state.center.x() - radius * std::cos(armor_yaw);
-        armor.position.y() = state.center.y() - radius * std::sin(armor_yaw);
-        armor.position.z() = state.center.z() + dz;
+        const Eigen::Vector2d center_xy =
+            outpost ? outpostBaseXY(state) : state.center.head<2>();
+        armor.position.x() = center_xy.x() - radius * std::cos(armor_yaw);
+        armor.position.y() = center_xy.y() - radius * std::sin(armor_yaw);
+        armor.position.z() = (outpost ? outpostBaseZ(state) : state.center.z()) + dz;
         armors.push_back(armor);
     }
     return armors;
 }
 
+std::array<Eigen::Vector2d, 4> projectArmorPixels(
+    const Eigen::Vector3d& center,
+    double center_yaw,
+    double radius,
+    double dz,
+    int armor_index,
+    double armor_pitch,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    const Eigen::Matrix3d& K,
+    const std::array<double, 5>& dist,
+    int armor_count) {
+    const double armor_yaw = center_yaw + armorYawOffset(armor_index, armor_count);
+    const Eigen::Vector3d armor_position(
+        center.x() - radius * std::cos(armor_yaw),
+        center.y() - radius * std::sin(armor_yaw),
+        center.z() + dz);
+    const Eigen::Matrix3d R_armor_to_odom =
+        (Eigen::AngleAxisd(armor_yaw, Eigen::Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(armor_pitch, Eigen::Vector3d::UnitY()))
+            .toRotationMatrix();
+    const Eigen::Isometry3d T_odom_to_camera = T_camera_to_odom.inverse();
+
+    std::array<Eigen::Vector2d, 4> pixels;
+    for (std::size_t i = 0; i < kSmallArmorCornersLocal.size(); ++i) {
+        const Eigen::Vector3d point_odom =
+            armor_position + R_armor_to_odom * kSmallArmorCornersLocal[i];
+        pixels[i] = projectPoint(T_odom_to_camera * point_odom, K, dist);
+    }
+    return pixels;
+}
+
 int matchArmorIndex(const TrackerState& state,
                     const auto_aim_interfaces::msg::Armor& armor,
                     int last_armor_index,
-                    double max_match_cost) {
+    double max_match_cost) {
     const auto predicted_armors = predictedArmorsFromState(state);
+
     double best_cost = std::numeric_limits<double>::max();
     int best_index = last_armor_index >= 0 ? last_armor_index : 0;
 
     for (const auto& predicted_armor : predicted_armors) {
         // 单观测匹配使用和批量匹配相同的代价，但不处理同帧唯一性。
         // 主要留给单元测试和只有一块观测的场景。
-        const double cost =
-            armorMatchCost(predicted_armor, armor, last_armor_index);
+        const double cost = state.armor_count == 3
+            ? outpostArmorMatchCost(
+                state, predicted_armor, armor, last_armor_index)
+            : armorMatchCost(
+                predicted_armor, armor, last_armor_index, true);
         if (cost < best_cost) {
             best_cost = cost;
             best_index = predicted_armor.index;
@@ -253,25 +698,46 @@ std::vector<int> matchArmorIndicesUnique(
     const TrackerState& state,
     const auto_aim_interfaces::msg::Armors& msg,
     int last_armor_index,
-    double max_match_cost) {
-    const auto predicted_armors = predictedArmorsFromState(state);
-    std::vector<int> matched;
-    matched.reserve(msg.armors.size());
-    std::array<bool, 4> used_indices = {false, false, false, false};
+    double max_match_cost,
+    double outpost_ambiguous_match_margin) {
+    return matchArmorIndicesUniqueWithCosts(
+        state, msg, last_armor_index, max_match_cost,
+        outpost_ambiguous_match_margin).first;
+}
 
-    for (const auto& armor : msg.armors) {
+std::pair<std::vector<int>, std::vector<double>> matchArmorIndicesUniqueWithCosts(
+    const TrackerState& state,
+    const auto_aim_interfaces::msg::Armors& msg,
+    int last_armor_index,
+    double max_match_cost,
+    double outpost_ambiguous_match_margin) {
+    (void)outpost_ambiguous_match_margin;
+    const auto predicted_armors = predictedArmorsFromState(state);
+    std::vector<int> matched(msg.armors.size(), -1);
+    std::vector<double> costs(
+        msg.armors.size(), std::numeric_limits<double>::infinity());
+    std::vector<bool> used_indices(predicted_armors.size(), false);
+    const bool outpost_matching = state.armor_count == 3;
+
+    for (std::size_t i = 0; i < msg.armors.size(); ++i) {
+        const auto& armor = msg.armors[i];
         double best_cost = std::numeric_limits<double>::max();
         int best_index = -1;
 
-        // 匹配仍是轻量启发式：yaw 连续性 + 位置误差 + 上一帧索引滞回。
+        // 匹配仍是轻量启发式：普通模型使用 yaw 连续性 + 位置误差；
+        // 前哨站这里临时按普通模型加入位置误差，用于验证 z 跳变是否来自槽位匹配。
         // 这里没有用马氏距离，是为了让匹配层保持独立于 graph 的协方差信息。
         for (const auto& predicted_armor : predicted_armors) {
-            if (used_indices[static_cast<std::size_t>(predicted_armor.index)]) {
+            const auto used_index = static_cast<std::size_t>(predicted_armor.index);
+            if (used_index < used_indices.size() && used_indices[used_index]) {
                 continue;
             }
 
-            const double cost = armorMatchCost(
-                predicted_armor, armor, last_armor_index);
+            const double cost = outpost_matching
+                ? outpostArmorMatchCost(
+                    state, predicted_armor, armor, last_armor_index)
+                : armorMatchCost(
+                    predicted_armor, armor, last_armor_index, true);
             if (cost < best_cost) {
                 best_cost = cost;
                 best_index = predicted_armor.index;
@@ -283,13 +749,14 @@ std::vector<int> matchArmorIndicesUnique(
         // 避免像素后端把多块观测挂到同一个 Pose3 key 上。
         if (best_index >= 0 && best_cost <= max_match_cost) {
             used_indices[static_cast<std::size_t>(best_index)] = true;
+            costs[i] = best_cost;
         } else {
             best_index = -1;
         }
-        matched.push_back(best_index);
+        matched[i] = best_index;
     }
 
-    return matched;
+    return {matched, costs};
 }
 
 ArmorRadiusCenterZFactor::ArmorRadiusCenterZFactor(
@@ -442,6 +909,136 @@ gtsam::Vector ArmorRadiusDZFactor::evaluateError(
     return gtsam::Vector4(tangential_err, radial_err, z_err, yaw_err);
 }
 
+ArmorOutpostGeometryFactor::ArmorOutpostGeometryFactor(
+    const gtsam::SharedNoiseModel& noise,
+    gtsam::Key armor_pose_key,
+    gtsam::Key radius_key,
+    gtsam::Key dz1_key,
+    gtsam::Key dz2_key,
+    gtsam::Key base_z_key,
+    gtsam::Key base_xy_key,
+    gtsam::Key center_yaw_key,
+    gtsam::Key center_key,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    int armor_index,
+    double radius_min,
+    double radius_max)
+    : Base(noise, armor_pose_key, radius_key, dz1_key, dz2_key,
+           base_z_key, base_xy_key, center_yaw_key, center_key),
+      T_camera_to_odom_(T_camera_to_odom),
+      armor_index_(armor_index),
+      radius_min_(radius_min),
+      radius_max_(radius_max) {}
+
+gtsam::Vector ArmorOutpostGeometryFactor::evaluateError(
+    const gtsam::Pose3& armor_pose_camera,
+    const double& radius_u,
+    const double& dz1,
+    const double& dz2,
+    const double& base_z,
+    const gtsam::Point2& base_xy,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center,
+    gtsam::OptionalMatrixType H1,
+    gtsam::OptionalMatrixType H2,
+    gtsam::OptionalMatrixType H3,
+    gtsam::OptionalMatrixType H4,
+    gtsam::OptionalMatrixType H5,
+    gtsam::OptionalMatrixType H6,
+    gtsam::OptionalMatrixType H7,
+    gtsam::OptionalMatrixType H8) const {
+    (void)center;
+    Eigen::Isometry3d pose{Eigen::Isometry3d::Identity()};
+    pose.pretranslate(armor_pose_camera.translation());
+    pose.rotate(armor_pose_camera.rotation().matrix());
+    const Eigen::Isometry3d armor_pose_odom = T_camera_to_odom_ * pose;
+    const Eigen::Vector3d armor_position = armor_pose_odom.translation();
+    const double armor_yaw_angle =
+        rotationMatrixToRPY(armor_pose_odom.rotation().matrix()).z();
+    const auto armor_yaw = gtsam::Rot2::fromAngle(armor_yaw_angle);
+
+    const double radius =
+        auto_graph::logisticFunction(radius_u, radius_min_, radius_max_);
+    const double expected_dz =
+        armor_index_ == 0 ? 0.0 : (armor_index_ == 1 ? dz1 : dz2);
+    const auto predicted_yaw =
+        gtsam::Rot2::fromAngle(center_yaw.theta() + armorYawOffset(armor_index_, 3));
+    const double nx = std::cos(predicted_yaw.theta());
+    const double ny = std::sin(predicted_yaw.theta());
+    const double tx = -ny;
+    const double ty = nx;
+    const double dx = base_xy.x() - armor_position.x();
+    const double dy = base_xy.y() - armor_position.y();
+
+    const double tangential_err = tx * dx + ty * dy;
+    const double radial_err = nx * dx + ny * dy - radius;
+    // 前哨站高度基准使用静态 base_z，避免单块观测把动态 center.z 拉到当前板高度。
+    // slot 0 时 expected_dz=0，slot 1/2 分别使用 dz1/dz2。
+    const double z_err = base_z + expected_dz - armor_position.z();
+    const double yaw_err = armor_yaw.localCoordinates(predicted_yaw).x();
+
+    if (H1) {
+        Eigen::Matrix<double, 4, 3> J_position;
+        J_position << -tx, -ty, 0.0,
+                      -nx, -ny, 0.0,
+                       0.0, 0.0, -1.0,
+                       0.0, 0.0, 0.0;
+
+        const Eigen::Vector3d rpy =
+            rotationMatrixToRPY(armor_pose_odom.rotation().matrix());
+        const double roll = rpy.x();
+        const double pitch = rpy.y();
+        const double cos_pitch = std::cos(pitch);
+        Eigen::Matrix<double, 1, 3> d_yaw_d_omega;
+        d_yaw_d_omega << 0.0, std::sin(roll) / cos_pitch,
+            std::cos(roll) / cos_pitch;
+
+        Eigen::Matrix<double, 4, 1> d_error_d_pose_yaw;
+        d_error_d_pose_yaw << 0.0, 0.0, 0.0, -1.0;
+
+        Eigen::Matrix<double, 4, 6> H1_matrix;
+        H1_matrix.leftCols<3>() = d_error_d_pose_yaw * d_yaw_d_omega;
+        H1_matrix.rightCols<3>() = J_position * armor_pose_odom.rotation().matrix();
+        *H1 = H1_matrix;
+    }
+    if (H2) {
+        const double dr =
+            auto_graph::logisticDerivative(radius, radius_min_, radius_max_);
+        *H2 = (gtsam::Matrix(4, 1) << 0.0, -dr, 0.0, 0.0).finished();
+    }
+    if (H3) {
+        // dz1 只在 index==1 时影响 z 残差。
+        *H3 = (gtsam::Matrix(4, 1) << 0.0, 0.0,
+               (armor_index_ == 1 ? 1.0 : 0.0), 0.0).finished();
+    }
+    if (H4) {
+        // dz2 只在 index==2 时影响 z 残差。
+        *H4 = (gtsam::Matrix(4, 1) << 0.0, 0.0,
+               (armor_index_ == 2 ? 1.0 : 0.0), 0.0).finished();
+    }
+    if (H5) {
+        *H5 = (gtsam::Matrix(4, 1) << 0.0, 0.0, 1.0, 0.0).finished();
+    }
+    if (H6) {
+        *H6 = (gtsam::Matrix(4, 2) << tx, ty,
+               nx, ny,
+               0.0, 0.0,
+               0.0, 0.0).finished();
+    }
+    if (H7) {
+        const double radial_projection = nx * dx + ny * dy;
+        *H7 = (gtsam::Matrix(4, 1) << -radial_projection,
+               tangential_err, 0.0, 1.0).finished();
+    }
+    if (H8) {
+        *H8 = (gtsam::Matrix(4, 3) << 0.0, 0.0, 0.0,
+               0.0, 0.0, 0.0,
+               0.0, 0.0, 0.0,
+               0.0, 0.0, 0.0).finished();
+    }
+    return gtsam::Vector4(tangential_err, radial_err, z_err, yaw_err);
+}
+
 ArmorTypedReprojFactor::ArmorTypedReprojFactor(
     const gtsam::SharedNoiseModel& noise,
     gtsam::Key armor_pose_key,
@@ -476,10 +1073,325 @@ gtsam::Vector ArmorTypedReprojFactor::evaluateError(
     return px - px_obs_;
 }
 
+ArmorEdgeCenterZReprojFactor::ArmorEdgeCenterZReprojFactor(
+    const gtsam::SharedNoiseModel& noise,
+    gtsam::Key radius_key,
+    gtsam::Key center_yaw_key,
+    gtsam::Key center_key,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    int armor_index,
+    double armor_pitch,
+    const Eigen::Matrix3d& K,
+    const std::array<double, 5>& dist,
+    const std::array<Eigen::Vector2d, 4>& observed_pixels,
+    double slope_k,
+    double radius_min,
+    double radius_max)
+    : Base(noise, radius_key, center_yaw_key, center_key),
+      T_camera_to_odom_(T_camera_to_odom),
+      armor_index_(armor_index),
+      armor_pitch_(armor_pitch),
+      K_(K),
+      dist_(dist),
+      observed_pixels_(observed_pixels),
+      slope_k_(slope_k),
+      radius_min_(radius_min),
+      radius_max_(radius_max) {}
+
+gtsam::Vector ArmorEdgeCenterZReprojFactor::computeError(
+    const double& radius_u,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center) const {
+    const double radius =
+        auto_graph::logisticFunction(radius_u, radius_min_, radius_max_);
+    const auto projected = projectArmorPixels(
+        auto_graph::point3ToEigen(center), center_yaw.theta(), radius, 0.0,
+        armor_index_, armor_pitch_, T_camera_to_odom_, K_, dist_);
+    const double inclined = armorInclinedToCamera(
+        center_yaw.theta(), armor_index_, armor_pitch_, T_camera_to_odom_, 4);
+    return armorEdgeLoss(projected, observed_pixels_, inclined, slope_k_);
+}
+
+gtsam::Vector ArmorEdgeCenterZReprojFactor::evaluateError(
+    const double& radius_u,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center,
+    gtsam::OptionalMatrixType H1,
+    gtsam::OptionalMatrixType H2,
+    gtsam::OptionalMatrixType H3) const {
+    const auto error = computeError(radius_u, center_yaw, center);
+    if (H1) {
+        *H1 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(radius_u + delta[0], center_yaw, center);
+        });
+    }
+    if (H2) {
+        *H2 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, gtsam::Rot2::fromAngle(center_yaw.theta() + delta[0]),
+                center);
+        });
+    }
+    if (H3) {
+        *H3 = finiteDiffColumns(4, 3, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, center_yaw,
+                gtsam::Point3(center.x() + delta[0],
+                              center.y() + delta[1],
+                              center.z() + delta[2]));
+        });
+    }
+    return error;
+}
+
+ArmorEdgeDZReprojFactor::ArmorEdgeDZReprojFactor(
+    const gtsam::SharedNoiseModel& noise,
+    gtsam::Key radius_key,
+    gtsam::Key dz_key,
+    gtsam::Key center_yaw_key,
+    gtsam::Key center_key,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    int armor_index,
+    double armor_pitch,
+    const Eigen::Matrix3d& K,
+    const std::array<double, 5>& dist,
+    const std::array<Eigen::Vector2d, 4>& observed_pixels,
+    double slope_k,
+    double radius_min,
+    double radius_max)
+    : Base(noise, radius_key, dz_key, center_yaw_key, center_key),
+      T_camera_to_odom_(T_camera_to_odom),
+      armor_index_(armor_index),
+      armor_pitch_(armor_pitch),
+      K_(K),
+      dist_(dist),
+      observed_pixels_(observed_pixels),
+      slope_k_(slope_k),
+      radius_min_(radius_min),
+      radius_max_(radius_max) {}
+
+gtsam::Vector ArmorEdgeDZReprojFactor::computeError(
+    const double& radius_u,
+    const double& dz,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center) const {
+    const double radius =
+        auto_graph::logisticFunction(radius_u, radius_min_, radius_max_);
+    const auto projected = projectArmorPixels(
+        auto_graph::point3ToEigen(center), center_yaw.theta(), radius, dz,
+        armor_index_, armor_pitch_, T_camera_to_odom_, K_, dist_);
+    const double inclined = armorInclinedToCamera(
+        center_yaw.theta(), armor_index_, armor_pitch_, T_camera_to_odom_, 4);
+    return armorEdgeLoss(projected, observed_pixels_, inclined, slope_k_);
+}
+
+gtsam::Vector ArmorEdgeDZReprojFactor::evaluateError(
+    const double& radius_u,
+    const double& dz,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center,
+    gtsam::OptionalMatrixType H1,
+    gtsam::OptionalMatrixType H2,
+    gtsam::OptionalMatrixType H3,
+    gtsam::OptionalMatrixType H4) const {
+    const auto error = computeError(radius_u, dz, center_yaw, center);
+    if (H1) {
+        *H1 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(radius_u + delta[0], dz, center_yaw, center);
+        });
+    }
+    if (H2) {
+        *H2 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(radius_u, dz + delta[0], center_yaw, center);
+        });
+    }
+    if (H3) {
+        *H3 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz,
+                gtsam::Rot2::fromAngle(center_yaw.theta() + delta[0]), center);
+        });
+    }
+    if (H4) {
+        *H4 = finiteDiffColumns(4, 3, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz, center_yaw,
+                gtsam::Point3(center.x() + delta[0],
+                              center.y() + delta[1],
+                              center.z() + delta[2]));
+        });
+    }
+    return error;
+}
+
+ArmorEdgeOutpostReprojFactor::ArmorEdgeOutpostReprojFactor(
+    const gtsam::SharedNoiseModel& noise,
+    gtsam::Key radius_key,
+    gtsam::Key dz1_key,
+    gtsam::Key dz2_key,
+    gtsam::Key base_z_key,
+    gtsam::Key base_xy_key,
+    gtsam::Key center_yaw_key,
+    gtsam::Key center_key,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    int armor_index,
+    double armor_pitch,
+    const Eigen::Matrix3d& K,
+    const std::array<double, 5>& dist,
+    const std::array<Eigen::Vector2d, 4>& observed_pixels,
+    double slope_k,
+    double radius_min,
+    double radius_max)
+    : Base(noise, radius_key, dz1_key, dz2_key, base_z_key, base_xy_key,
+           center_yaw_key, center_key),
+      T_camera_to_odom_(T_camera_to_odom),
+      armor_index_(armor_index),
+      armor_pitch_(armor_pitch),
+      K_(K),
+      dist_(dist),
+      observed_pixels_(observed_pixels),
+      slope_k_(slope_k),
+      radius_min_(radius_min),
+      radius_max_(radius_max) {}
+
+gtsam::Vector ArmorEdgeOutpostReprojFactor::computeError(
+    const double& radius_u,
+    const double& dz1,
+    const double& dz2,
+    const double& base_z,
+    const gtsam::Point2& base_xy,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center) const {
+    (void)center;
+    const double radius =
+        auto_graph::logisticFunction(radius_u, radius_min_, radius_max_);
+    const double dz = armor_index_ == 0 ? 0.0 : (armor_index_ == 1 ? dz1 : dz2);
+    Eigen::Vector3d projection_center(base_xy.x(), base_xy.y(), base_z);
+    const auto projected = projectArmorPixels(
+        projection_center, center_yaw.theta(), radius, dz,
+        armor_index_, armor_pitch_, T_camera_to_odom_, K_, dist_, 3);
+    const double inclined = armorInclinedToCamera(
+        center_yaw.theta(), armor_index_, armor_pitch_, T_camera_to_odom_, 3);
+    return armorEdgeLoss(projected, observed_pixels_, inclined, slope_k_);
+}
+
+gtsam::Vector ArmorEdgeOutpostReprojFactor::evaluateError(
+    const double& radius_u,
+    const double& dz1,
+    const double& dz2,
+    const double& base_z,
+    const gtsam::Point2& base_xy,
+    const gtsam::Rot2& center_yaw,
+    const gtsam::Point3& center,
+    gtsam::OptionalMatrixType H1,
+    gtsam::OptionalMatrixType H2,
+    gtsam::OptionalMatrixType H3,
+    gtsam::OptionalMatrixType H4,
+    gtsam::OptionalMatrixType H5,
+    gtsam::OptionalMatrixType H6,
+    gtsam::OptionalMatrixType H7) const {
+    const auto error = computeError(
+        radius_u, dz1, dz2, base_z, base_xy, center_yaw, center);
+    if (H1) {
+        *H1 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u + delta[0], dz1, dz2, base_z, base_xy, center_yaw, center);
+        });
+    }
+    if (H2) {
+        *H2 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz1 + delta[0], dz2, base_z, base_xy, center_yaw, center);
+        });
+    }
+    if (H3) {
+        *H3 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz1, dz2 + delta[0], base_z, base_xy, center_yaw, center);
+        });
+    }
+    if (H4) {
+        *H4 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz1, dz2, base_z + delta[0], base_xy, center_yaw, center);
+        });
+    }
+    if (H5) {
+        *H5 = finiteDiffColumns(4, 2, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz1, dz2, base_z,
+                gtsam::Point2(base_xy.x() + delta[0], base_xy.y() + delta[1]),
+                center_yaw, center);
+        });
+    }
+    if (H6) {
+        *H6 = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                radius_u, dz1, dz2, base_z, base_xy,
+                gtsam::Rot2::fromAngle(center_yaw.theta() + delta[0]), center);
+        });
+    }
+    if (H7) {
+        *H7 = gtsam::Matrix::Zero(4, 3);
+    }
+    return error;
+}
+
+ArmorEdgeYawReprojFactor::ArmorEdgeYawReprojFactor(
+    const gtsam::SharedNoiseModel& noise,
+    gtsam::Key center_yaw_key,
+    const Eigen::Vector3d& center,
+    double radius,
+    double dz,
+    int armor_index,
+    double armor_pitch,
+    const Eigen::Isometry3d& T_camera_to_odom,
+    const Eigen::Matrix3d& K,
+    const std::array<double, 5>& dist,
+    const std::array<Eigen::Vector2d, 4>& observed_pixels,
+    double slope_k,
+    int armor_count)
+    : Base(noise, center_yaw_key),
+      center_(center),
+      radius_(radius),
+      dz_(dz),
+      armor_index_(armor_index),
+      armor_pitch_(armor_pitch),
+      T_camera_to_odom_(T_camera_to_odom),
+      K_(K),
+      dist_(dist),
+      observed_pixels_(observed_pixels),
+      slope_k_(slope_k),
+      armor_count_(armor_count) {}
+
+gtsam::Vector ArmorEdgeYawReprojFactor::computeError(
+    const gtsam::Rot2& center_yaw) const {
+    const auto projected = projectArmorPixels(
+        center_, center_yaw.theta(), radius_, dz_, armor_index_, armor_pitch_,
+        T_camera_to_odom_, K_, dist_, armor_count_);
+    const double inclined = armorInclinedToCamera(
+        center_yaw.theta(), armor_index_, armor_pitch_,
+        T_camera_to_odom_, armor_count_);
+    return armorEdgeYawLoss(projected, observed_pixels_, inclined, slope_k_);
+}
+
+gtsam::Vector ArmorEdgeYawReprojFactor::evaluateError(
+    const gtsam::Rot2& center_yaw,
+    gtsam::OptionalMatrixType H) const {
+    const auto error = computeError(center_yaw);
+    if (H) {
+        *H = finiteDiffColumns(4, 1, [&](const gtsam::Vector& delta) {
+            return computeError(
+                gtsam::Rot2::fromAngle(center_yaw.theta() + delta[0]));
+        });
+    }
+    return error;
+}
+
 ArmorCvPixelGraph::Variables ArmorCvPixelGraph::declareVariables(
     auto_graph::GraphOptimizer& optimizer) {
     // 主变量布局参考 jlu tracker：位置、速度、yaw、vyaw 拆成 typed 变量；
-    // 半径和 dz 是 frame 0 静态变量。
+    // 普通半径/dz 和前哨站半径/base_z/dz1/dz2 都是 frame 0 静态变量。
     //
     // dynamic 变量的 key 会随 frame id 增长，例如 x0/x1/x2；static 变量始终
     // 使用 prefix + 0，例如 a0/b0/z0。这样半径和 dz 可以被所有帧共同约束，
@@ -491,7 +1403,12 @@ ArmorCvPixelGraph::Variables ArmorCvPixelGraph::declareVariables(
         optimizer.declareDynamic<double>("vyaw", 'w'),
         optimizer.declareStatic<double>("radius_a", 'a'),
         optimizer.declareStatic<double>("radius_b", 'b'),
-        optimizer.declareStatic<double>("dz", 'z')};
+        optimizer.declareStatic<double>("dz", 'z'),
+        optimizer.declareStatic<double>("outpost_radius", 'o'),
+        optimizer.declareStatic<double>("outpost_dz_1", 'p'),
+        optimizer.declareStatic<double>("outpost_dz_2", 'q'),
+        optimizer.declareStatic<double>("outpost_base_z", 's'),
+        optimizer.declareStatic<gtsam::Point2>("outpost_base_xy", 'u')};
 }
 
 ArmorCvPixelGraph::ArmorCvPixelGraph(TrackerConfig config)
@@ -500,28 +1417,36 @@ ArmorCvPixelGraph::ArmorCvPixelGraph(TrackerConfig config)
       vars_(declareVariables(optimizer_)) {}
 
 void ArmorCvPixelGraph::initialize(
-    const auto_aim_interfaces::msg::Armors& armors_msg) {
+    const auto_aim_interfaces::msg::Armors& armors_msg,
+    const TrackerState* outpost_reinit_hint) {
     optimizer_.beginInit();
 
-    // 第一帧只用第一块装甲板反推中心初值，后续由图优化逐步收敛半径/dz。
+    // 前哨站首帧使用最中心观测作为内部 slot0，避免消息顺序变化或 reset 后
+    // 把 center_z/dz1/dz2 的语义整体换位。
+    // 普通模型仍使用首块装甲板反推中心初值，后续由图优化逐步收敛半径/dz。
     // runtime_ 是跨帧缓存，这里必须写入初始状态，否则 update() 阶段无法用
     // 上一帧状态生成本帧预测初值。
-    const auto state = initialStateFromFirstArmor(armors_msg);
+    const auto state = initialStateFromFirstArmor(
+        armors_msg, config_, outpost_reinit_hint);
     runtime_.state = state;
     runtime_.last_armor_index = 0;
     runtime_.matched_indices.clear();
+    runtime_.match_costs.clear();
 
     const double radius_a_u = radiusToState(state.radius_1);
     const double radius_b_u = radiusToState(state.radius_2);
+    const double outpost_radius_u = radiusToState(config_.outpost_radius);
 
     // 初始先验约束 frame 0，并同时插入对应初值。静态几何参数用配置里的
     // prior_noise 控制可信度；GTSAM 半径变量使用无界 logistic 状态，避免优化时
     // 直接越过物理半径上下限。
     // 这里的先验不是最终真值，只是给 iSAM2 一个可线性化的起点；后续像素因子
     // 和几何因子会持续修正 center/yaw/radius/dz。
+    const double initial_center_z_sigma = state.armor_count == 3 ? 0.01 : 0.1;
     optimizer_.addPrior(
         vars_.center, auto_graph::eigenToPoint3(state.center),
-        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(0.1, 0.1, 0.1)));
+        gtsam::noiseModel::Diagonal::Sigmas(
+            gtsam::Vector3(0.1, 0.1, initial_center_z_sigma)));
     optimizer_.addPrior(
         vars_.velocity, state.velocity,
         gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(0.5, 0.5, 0.5)));
@@ -540,6 +1465,24 @@ void ArmorCvPixelGraph::initialize(
     optimizer_.addPrior(
         vars_.dz, state.dz,
         gtsam::noiseModel::Isotropic::Sigma(1, config_.prior_noise.dz));
+    optimizer_.addPrior(
+        vars_.outpost_radius, outpost_radius_u,
+        gtsam::noiseModel::Isotropic::Sigma(
+            1, config_.outpost_prior_noise.radius));
+    optimizer_.addPrior(
+        vars_.outpost_base_z, outpostBaseZ(state),
+        gtsam::noiseModel::Isotropic::Sigma(1, 0.01));
+    optimizer_.addPrior(
+        vars_.outpost_base_xy, gtsam::Point2(outpostBaseXY(state)),
+        gtsam::noiseModel::Isotropic::Sigma(2, 0.1));
+    optimizer_.addPrior(
+        vars_.outpost_dz_1, state.dz,
+        gtsam::noiseModel::Isotropic::Sigma(
+            1, config_.outpost_prior_noise.dz));
+    optimizer_.addPrior(
+        vars_.outpost_dz_2, state.outpost_dz_2,
+        gtsam::noiseModel::Isotropic::Sigma(
+            1, config_.outpost_prior_noise.dz));
 
     optimizer_.finishInit();
     initialized_ = true;
@@ -559,6 +1502,7 @@ ArmorCvPixelOutput ArmorCvPixelGraph::update(
 
 void ArmorCvPixelGraph::addMotionFactors(double dt) {
     auto& state = runtime_.state;
+    const bool outpost_motion = state.armor_count == 3;
     // 先用上一轮输出做显式预测，作为本帧 typed variables 的初值。
     // 这一步只更新 runtime 中的预测值；真正的概率约束在下面的 GTSAM 因子中。
     // dt 来自 ROS 消息时间差或调用层模拟时间，必须同时用于显式预测和
@@ -574,58 +1518,67 @@ void ArmorCvPixelGraph::addMotionFactors(double dt) {
     optimizer_.insert(vars_.vyaw, state.vyaw);
 
     // 运动模型拆成位置积分、速度随机游走、yaw 积分、vyaw 随机游走四类因子。
-    // config_.s2q* 是过程噪声方差配置；因子接口需要标准差，所以统一走
-    // sigmaFromVariance()，同时对极小值做保护以避免零噪声。
+    // 当前这些 sigma 是拆分因子图的每帧残差尺度；完整 CV Q(dt) 需要联合因子表达。
+    const MotionNoiseSigmas motion_noise =
+        motionNoiseSigmasForConfig(config_, outpost_motion, dt);
     const auto translation_noise = gtsam::noiseModel::Diagonal::Sigmas(
-        gtsam::Vector3(sigmaFromVariance(config_.s2qxy),
-                       sigmaFromVariance(config_.s2qxy),
-                       sigmaFromVariance(config_.s2qz)));
+        gtsam::Vector3(
+            motion_noise.center_xy,
+            motion_noise.center_xy,
+            motion_noise.center_z));
     optimizer_.addFactor<TranslationFactor>(
         translation_noise,
         optimizer_.keyPrev(vars_.center), optimizer_.keyPrev(vars_.velocity),
         optimizer_.key(vars_.center), dt);
 
-    // 速度和角速度不做显式积分，只加随机游走平滑因子。vel_sigma/vyaw_sigma 越小，
-    // 图越倾向于保持上一帧速度；越大则更信任观测带来的突变。
+    // vel_sigma/vyaw_sigma 越小，图越倾向于保持上一帧速度；越大则更信任观测突变。
     const auto velocity_noise = gtsam::noiseModel::Diagonal::Sigmas(
-        gtsam::Vector3(config_.vel_sigma, config_.vel_sigma, config_.vel_sigma));
+        gtsam::Vector3(
+            motion_noise.velocity_xy,
+            motion_noise.velocity_xy,
+            motion_noise.velocity_z));
     optimizer_.addFactor<VelocityFactor>(
         velocity_noise, optimizer_.keyPrev(vars_.velocity),
         optimizer_.key(vars_.velocity));
 
     optimizer_.addFactor<YawFactor>(
-        gtsam::noiseModel::Isotropic::Sigma(
-            1, sigmaFromVariance(config_.s2qyaw)),
+        gtsam::noiseModel::Isotropic::Sigma(1, motion_noise.yaw),
         optimizer_.keyPrev(vars_.yaw), optimizer_.keyPrev(vars_.vyaw),
         optimizer_.key(vars_.yaw), dt);
     optimizer_.addFactor<VyawFactor>(
-        gtsam::noiseModel::Isotropic::Sigma(1, config_.vyaw_sigma),
+        gtsam::noiseModel::Isotropic::Sigma(1, motion_noise.vyaw),
         optimizer_.keyPrev(vars_.vyaw), optimizer_.key(vars_.vyaw));
 }
 
 void ArmorCvPixelGraph::addObservationFactors(
     const auto_aim_interfaces::msg::Armors& armors_msg,
     const Eigen::Isometry3d& T_camera_to_odom) {
+    const bool outpost_frame = std::any_of(
+        armors_msg.armors.begin(), armors_msg.armors.end(),
+        [](const auto_aim_interfaces::msg::Armor& armor) {
+            return armor.number == "outpost";
+        });
+    const int previous_armor_count = runtime_.state.armor_count;
+    runtime_.state.armor_count = outpost_frame ? 3 : 4;
+    if (outpost_frame && previous_armor_count != 3) {
+        runtime_.state.radius_1 = config_.outpost_radius;
+        runtime_.state.radius_2 = config_.outpost_radius;
+        initializeOutpostDzFromObservations(
+            runtime_.state, armors_msg,
+            selectOutpostBaseObservation(armors_msg));
+    }
+
     // 匹配在 armor graph 内完成，core 只看到具体 key 和 factor。
     // armors_msg.armors 的顺序是检测器输出顺序；matched_indices 与它一一对应，
     // 值为 0..3 表示物理装甲板槽位，-1 表示该观测不参与本帧图优化。
     // last_armor_index 用于跨帧连续性，避免 yaw 接近 +-pi 时装甲板编号跳变。
-    runtime_.matched_indices =
-        matchArmorIndicesUnique(runtime_.state, armors_msg,
-                                runtime_.last_armor_index,
-                                config_.match_max_cost);
-
-    const auto pixel_noise = gtsam::noiseModel::Diagonal::Sigmas(
-        gtsam::Vector2(config_.pixel_sigma, config_.pixel_sigma));
-    gtsam::Vector6 pose_prior_sigmas;
-    pose_prior_sigmas << 0.1, 0.1, 0.1, 0.1, 0.1, 0.1;
-    const auto pose_prior_noise =
-        gtsam::noiseModel::Diagonal::Sigmas(pose_prior_sigmas);
-    const auto geo_noise = gtsam::noiseModel::Diagonal::Sigmas(
-        gtsam::Vector4(config_.geo_noise.tangential,
-                       config_.geo_noise.radial,
-                       config_.geo_noise.height,
-                       config_.geo_noise.yaw));
+    auto [matched_indices, match_costs] =
+        matchArmorIndicesUniqueWithCosts(
+            runtime_.state, armors_msg, runtime_.last_armor_index,
+            config_.match_max_cost,
+            config_.outpost_ambiguous_match_margin);
+    runtime_.matched_indices = std::move(matched_indices);
+    runtime_.match_costs = std::move(match_costs);
 
     for (std::size_t i = 0; i < armors_msg.armors.size(); ++i) {
         const int armor_index = runtime_.matched_indices[i];
@@ -635,6 +1588,28 @@ void ArmorCvPixelGraph::addObservationFactors(
             continue;
         }
         const auto& armor = armors_msg.armors[i];
+        const Eigen::Vector3d armor_pos_odom(
+            armor.pose.position.x, armor.pose.position.y, armor.pose.position.z);
+        const Eigen::Vector3d armor_pos_camera =
+            T_camera_to_odom.inverse() * armor_pos_odom;
+        const auto obs_noise =
+            observationNoiseForArmor(config_, armor, armor_pos_camera.norm());
+        const auto pixel_noise = gtsam::noiseModel::Diagonal::Sigmas(
+            gtsam::Vector2(obs_noise.pixel_sigma, obs_noise.pixel_sigma));
+        gtsam::Vector6 pose_prior_sigmas;
+        pose_prior_sigmas << obs_noise.pose_prior_sigma,
+                             obs_noise.pose_prior_sigma,
+                             obs_noise.pose_prior_sigma,
+                             obs_noise.pose_prior_sigma,
+                             obs_noise.pose_prior_sigma,
+                             obs_noise.pose_prior_sigma;
+        const auto pose_prior_noise =
+            gtsam::noiseModel::Diagonal::Sigmas(pose_prior_sigmas);
+        const auto geo_noise = gtsam::noiseModel::Diagonal::Sigmas(
+            gtsam::Vector4(obs_noise.geo_noise.tangential,
+                           obs_noise.geo_noise.radial,
+                           obs_noise.geo_noise.height,
+                           obs_noise.geo_noise.yaw));
         addArmorObservationFactors(
             armor, armor_index, T_camera_to_odom, pixel_noise,
             pose_prior_noise, geo_noise);
@@ -653,6 +1628,8 @@ void ArmorCvPixelGraph::addArmorObservationFactors(
     // 1. 每个装甲板观测先生成一个辅助 Pose3 key，表达相机坐标系下的装甲板位姿；
     // 2. 像素重投影因子只连接这个 Pose3，保留角点级像素信息；
     // 3. 几何因子再把 Pose3 连接回主状态 center/yaw/radius/dz。
+    // 4. 四角点齐全时额外加入 auto_aim EdgeLoss 风格 direct factor，让主状态
+    //    直接接收四边形 2D 几何约束。
     const auto akey = armorPoseKey(optimizer_.getFrameId(), armor_index);
     const auto armor_pose_camera =
         armorPoseCameraFromObservation(armor, T_camera_to_odom);
@@ -675,6 +1652,59 @@ void ArmorCvPixelGraph::addArmorObservationFactors(
                             armor.detected_points[corner].y));
     }
 
+    const bool has_full_corners = armor.detected_points.size() >= corners.size();
+    const bool is_outpost = armor.number == "outpost";
+    const double armor_pitch = is_outpost
+        ? config_.outpost_armor_pitch
+        : config_.standard_armor_pitch;
+    const auto edge_noise =
+        gtsam::noiseModel::Isotropic::Sigma(4, config_.edge_reproj_sigma);
+    auto add_yaw_edge_factor = [&]() {
+        if (!config_.use_edge_reproj_factor || !has_full_corners) {
+            return;
+        }
+
+        const auto& state = runtime_.state;
+        const int armor_count = is_outpost ? 3 : 4;
+        Eigen::Vector3d center_snapshot = state.center;
+        double radius_snapshot = 0.0;
+        double dz_snapshot = 0.0;
+        if (is_outpost) {
+            const Eigen::Vector2d base_xy = outpostBaseXY(state);
+            center_snapshot.x() = base_xy.x();
+            center_snapshot.y() = base_xy.y();
+            center_snapshot.z() = outpostBaseZ(state);
+            radius_snapshot = state.radius_1;
+            dz_snapshot = armor_index == 0
+                ? 0.0
+                : (armor_index == 1 ? state.dz : state.outpost_dz_2);
+        } else {
+            radius_snapshot = (armor_index % 2 == 0)
+                ? state.radius_1
+                : state.radius_2;
+            dz_snapshot = (armor_index % 2 == 0) ? 0.0 : state.dz;
+        }
+
+        optimizer_.addFactor<ArmorEdgeYawReprojFactor>(
+            edge_noise, optimizer_.key(vars_.yaw), center_snapshot,
+            radius_snapshot, dz_snapshot, armor_index, armor_pitch,
+            T_camera_to_odom, config_.camera_matrix, config_.distortion,
+            observedArmorPixels(armor), config_.edge_loss_slope_k, armor_count);
+    };
+
+    if (is_outpost) {
+        optimizer_.addFactor<ArmorOutpostGeometryFactor>(
+            geo_noise, akey, optimizer_.key(vars_.outpost_radius, 0),
+            optimizer_.key(vars_.outpost_dz_1, 0),
+            optimizer_.key(vars_.outpost_dz_2, 0),
+            optimizer_.key(vars_.outpost_base_z, 0),
+            optimizer_.key(vars_.outpost_base_xy, 0),
+            optimizer_.key(vars_.yaw), optimizer_.key(vars_.center),
+            T_camera_to_odom, armor_index, kRadiusMin, kRadiusMax);
+        add_yaw_edge_factor();
+        return;
+    }
+
     // 偶数/奇数装甲板连接到不同静态半径；奇数额外连接 dz。
     // armor_index 的奇偶含义来自四装甲板几何：0/2 共用 radius_a，1/3 共用
     // radius_b，并且奇数槽位对应上下层高度差 dz。
@@ -683,12 +1713,14 @@ void ArmorCvPixelGraph::addArmorObservationFactors(
             geo_noise, akey, optimizer_.key(vars_.radius_a, 0),
             optimizer_.key(vars_.yaw), optimizer_.key(vars_.center),
             T_camera_to_odom, armor_index, kRadiusMin, kRadiusMax);
+        add_yaw_edge_factor();
     } else {
         optimizer_.addFactor<ArmorRadiusDZFactor>(
             geo_noise, akey, optimizer_.key(vars_.radius_b, 0),
             optimizer_.key(vars_.dz, 0), optimizer_.key(vars_.yaw),
             optimizer_.key(vars_.center), T_camera_to_odom, armor_index,
             kRadiusMin, kRadiusMax);
+        add_yaw_edge_factor();
     }
 }
 
@@ -699,6 +1731,7 @@ ArmorCvPixelOutput ArmorCvPixelGraph::makeOutput(
     // estimate；这种情况下调用层仍能拿到连续预测，而不是空输出。
     output.solve_result = solve_result;
     output.matched_indices = runtime_.matched_indices;
+    output.match_costs = runtime_.match_costs;
     output.state = runtime_.state;
 
     if (solve_result.optimized) {
@@ -707,13 +1740,33 @@ ArmorCvPixelOutput ArmorCvPixelGraph::makeOutput(
         output.state.center = auto_graph::point3ToEigen(
             optimizer_.estimate(vars_.center));
         output.state.velocity = optimizer_.estimate(vars_.velocity);
-        output.state.yaw = optimizer_.estimate(vars_.yaw).theta();
+        const double raw_yaw = optimizer_.estimate(vars_.yaw).theta();
+        output.state.yaw = runtime_.state.yaw +
+            auto_graph::shortestAngularDistance(runtime_.state.yaw, raw_yaw);
         output.state.vyaw = optimizer_.estimate(vars_.vyaw);
-        output.state.radius_1 = auto_graph::logisticFunction(
-            optimizer_.estimate(vars_.radius_a), kRadiusMin, kRadiusMax);
-        output.state.radius_2 = auto_graph::logisticFunction(
-            optimizer_.estimate(vars_.radius_b), kRadiusMin, kRadiusMax);
-        output.state.dz = optimizer_.estimate(vars_.dz);
+        output.state.armor_count = runtime_.state.armor_count;
+        if (output.state.armor_count == 3) {
+            output.state.radius_1 = auto_graph::logisticFunction(
+                optimizer_.estimate(vars_.outpost_radius), kRadiusMin, kRadiusMax);
+            output.state.radius_2 = output.state.radius_1;
+            output.state.dz = optimizer_.estimate(vars_.outpost_dz_1);
+            output.state.outpost_dz_2 = optimizer_.estimate(vars_.outpost_dz_2);
+            output.state.outpost_base_xy =
+                optimizer_.estimate(vars_.outpost_base_xy);
+            output.state.outpost_base_z = optimizer_.estimate(vars_.outpost_base_z);
+            output.state.center.x() = output.state.outpost_base_xy.x();
+            output.state.center.y() = output.state.outpost_base_xy.y();
+            output.state.center.z() = output.state.outpost_base_z;
+        } else {
+            output.state.radius_1 = auto_graph::logisticFunction(
+                optimizer_.estimate(vars_.radius_a), kRadiusMin, kRadiusMax);
+            output.state.radius_2 = auto_graph::logisticFunction(
+                optimizer_.estimate(vars_.radius_b), kRadiusMin, kRadiusMax);
+            output.state.dz = optimizer_.estimate(vars_.dz);
+            output.state.outpost_dz_2 = runtime_.state.outpost_dz_2;
+            output.state.outpost_base_xy = runtime_.state.outpost_base_xy;
+            output.state.outpost_base_z = runtime_.state.outpost_base_z;
+        }
         runtime_.state = output.state;
         // 只有优化成功后才提交 last_armor_index，避免失败帧或冷启动帧把离群匹配
         // 写进跨帧连续性缓存。
