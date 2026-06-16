@@ -505,7 +505,7 @@ public:
 </p>
 
 <div class="flow">
-  <div class="flow-box blue">graph_optimizer_test.cpp</div>
+  <div class="flow-box blue">graph_optimizer_test.cpp<br>filter_graph_optimizer.cpp</div>
   <div class="flow-arrow">-&gt;</div>
   <div class="flow-box">ArmorGraphTracker</div>
   <div class="flow-arrow">-&gt;</div>
@@ -690,7 +690,8 @@ void ArmorCvPixelGraph::addObservationFactors(...) {
 <p>建议按调用方向读，不要从某个 factor 的雅可比开始硬啃。</p>
 
 <ol style="margin-left:22px">
-  <li><code>graph_optimizer_test.cpp</code>：看 ROS 参数如何进入 <code>TrackerConfig</code>，以及 TF 和 topic 边界。</li>
+  <li><code>graph_optimizer_test.cpp</code>：看纯图优化模式下 ROS 参数如何进入 <code>TrackerConfig</code>，以及 TF 和 topic 边界。</li>
+  <li><code>filter_graph_optimizer.cpp</code>：看滤波器前端结果如何通过同步和弱先验进入同一套 <code>ArmorGraphTracker</code>。</li>
   <li><code>armor_tracker.hpp/cpp</code>：看空帧、初始化、reset、<code>ArmorCvPixelGraph</code> 调用和输出封装。</li>
   <li><code>graph_core.hpp/cpp</code>：看 <code>Var&lt;T&gt;</code>、key 映射、初值/因子暂存和 <code>GraphOptimizer::solve()</code>。</li>
   <li><code>armor_model.hpp/cpp</code>：看 <code>ArmorCvPixelGraph</code> 如何初始化、预测、匹配、写因子和输出。</li>

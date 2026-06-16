@@ -1,6 +1,6 @@
 #include "filter_test/graph_optimizer/armor_tracker.hpp"
 #include "filter_test/graph_optimizer/rune_model.hpp"
-#include "filter_test/camera_info_utils.hpp"
+#include "filter_test/ros_utils/camera_info_utils.hpp"
 
 #include <auto_aim_interfaces/msg/rune_info.hpp>
 #include <auto_aim_interfaces/msg/rune_targets.hpp>

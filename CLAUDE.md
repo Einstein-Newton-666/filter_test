@@ -59,8 +59,11 @@ colcon test --packages-select armor_simulation --ctest-args -R "test_noise_model
 ## 运行方式
 
 ```bash
-# 当前默认只启动 graph_optimizer_test
+# 当前 launch 会读取 config.yaml 的 tracker_backend 默认值；
+# 但返回列表实际只启用仿真、云台和 filter，图优化后端按需取消注释或单独运行。
 ros2 launch filter_test filter_test.launch.py
+ros2 launch filter_test filter_test.launch.py tracker_backend:=graph
+ros2 launch filter_test filter_test.launch.py tracker_backend:=filter_graph
 
 # 仅仿真器
 ros2 launch armor_simulation simulation.launch.py
@@ -75,12 +78,16 @@ ros2 run filter_test filter \
   --ros-args --params-file src/filter_test/config/config.yaml
 ros2 run filter_test graph_optimizer_test \
   --ros-args --params-file src/filter_test/config/config.yaml
+ros2 run filter_test filter_graph_optimizer \
+  --ros-args --params-file src/filter_test/config/config.yaml
 ros2 run filter_test jlu_tracker \
   --ros-args --params-file src/filter_test/config/config.yaml
 ```
 
 `filter_test.launch.py` 已定义仿真器、云台、angle_solver、传统滤波器、图优化器和
-jlu tracker，但当前默认只启用 `graph_optimizer_test`。完整闭环需要手动打开对应节点。
+jlu tracker。后端默认值来自 `config.yaml` 的顶层 `tracker_backend`，命令行参数优先；
+但当前 `LaunchDescription` 返回列表只启用仿真、云台和 `filter`，图优化后端、
+angle_solver、能量机关和 jlu 节点仍保持注释；完整闭环需要确认对应节点已加入返回列表。
 
 ## 项目结构
 
@@ -108,7 +115,8 @@ src/
 │   │   │   ├── extended_kalman.hpp
 │   │   │   ├── unscented_kalman.hpp
 │   │   │   ├── cv_model.hpp
-│   │   │   └── singer_model.hpp
+│   │   │   ├── singer_model.hpp
+│   │   │   └── filter_common.hpp
 │   │   ├── graph_optimizer/
 │   │   │   ├── graph_core.hpp        # auto_graph::GraphOptimizer, Var<T>, SolveResult
 │   │   │   ├── graph_math.hpp        # 角度、logistic、Eigen/GTSAM helper
@@ -116,19 +124,25 @@ src/
 │   │   │   ├── armor_tracker.hpp     # ArmorGraphTracker, FrameTimeTracker
 │   │   │   └── rune_model.hpp        # RuneCvGraph, 能量机关 factors/state
 │   │   ├── jlu_tracker/              # jlu_vision_26 tracker 适配层
+│   │   ├── ros_utils/                # 相机信息、图优化节点、滤波前端适配工具
 │   │   ├── filter.hpp                # ArmorFilter 业务逻辑
 │   │   ├── filter_test.hpp           # ArmorTest ROS 节点
-│   │   ├── graph_optimizer_test.hpp  # GraphOptimizerTest ROS 节点外壳
-│   │   └── common.hpp
+│   │   └── graph_optimizer_test.hpp  # GraphOptimizerTest ROS 节点外壳
 │   ├── src/
-│   │   ├── filter.cpp
 │   │   ├── filter_test.cpp
+│   │   ├── filter_graph_optimizer.cpp
+│   │   ├── filters/
+│   │   │   └── filter.cpp            # ArmorFilter 实现
 │   │   ├── graph_optimizer/
 │   │   │   ├── graph_core.cpp
 │   │   │   ├── armor_model.cpp
 │   │   │   ├── armor_tracker.cpp
 │   │   │   └── rune_model.cpp
+│   │   ├── ros_utils/
+│   │   │   ├── camera_info_utils.cpp
+│   │   │   └── graph_optimizer_node_utils.cpp
 │   │   ├── graph_optimizer_test.cpp
+│   │   ├── rune_graph_optimizer.cpp
 │   │   └── jlu_tracker_node.cpp
 │   ├── config/config.yaml
 │   └── launch/filter_test.launch.py
@@ -146,7 +160,10 @@ src/
 - `filters/unscented_kalman.hpp`：动态维度 UKF。
 - `filters/cv_model.hpp`：CV 11D 预测和观测模型。
 - `filters/singer_model.hpp`：Singer 15D 预测和观测模型。
-- `filter.hpp` / `filter.cpp`：`ArmorFilter` 业务流程。
+- `filters/filter_common.hpp`：滤波器角度、状态枚举和 ypd 工具。
+- `filter.hpp` / `src/filters/filter.cpp`：`ArmorFilter` 业务流程。
+- `filter_test.hpp` / `src/filter_test.cpp`：传统滤波 ROS 节点外壳。
+- `src/filter_graph_optimizer.cpp`：滤波器前端 + 图优化后端 ROS 节点。
 
 传统路径：
 
@@ -363,7 +380,7 @@ pos = center - r * [cos(armor_yaw), sin(armor_yaw), 0]
 
 | 文件 | 控制节点 | 关键参数 |
 | --- | --- | --- |
-| `src/filter_test/config/config.yaml` | `/filter`, `/graph_optimizer_test`, `/jlu_tracker`, `/gimbal_simulation` | 滤波器选择、过程/观测噪声、图优化噪声、smoother、`camera_info_url`、云台发布率。 |
+| `src/filter_test/config/config.yaml` | `/filter`, `/graph_optimizer_test`, `/filter_graph_optimizer`, `/rune_graph_optimizer`, `/jlu_tracker`, `/gimbal_simulation` | 后端选择、滤波器选择、过程/观测噪声、图优化噪声、前端弱先验、smoother、`camera_info_url`、云台发布率。 |
 | `src/armor_simulation/config/simulation_config.yaml` | `/armor_simulation_node`, `/rune_simulation_node` | 初始状态、运动限制、几何参数、像素噪声、离群点、`camera_info_url`、图像发布、`publish_gimbal_gt`。 |
 
 图优化关键参数：

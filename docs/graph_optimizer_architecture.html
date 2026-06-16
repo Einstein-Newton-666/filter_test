@@ -111,9 +111,9 @@
   <tr><th>层</th><th>装甲板路径</th><th>能量机关路径</th><th>职责</th></tr>
   <tr>
     <td>ROS 节点</td>
-    <td><code>graph_optimizer_test.cpp</code></td>
+    <td><code>graph_optimizer_test.cpp</code><br><code>filter_graph_optimizer.cpp</code></td>
     <td><code>rune_graph_optimizer.cpp</code></td>
-    <td>读参数、查 <code>odom -> camera_optical_frame</code>、订阅观测、发布结果。</td>
+    <td>读参数、查 <code>odom -> camera_optical_frame</code>、订阅观测、可选同步滤波器前端结果、发布结果。</td>
   </tr>
   <tr>
     <td>门面层</td>
@@ -240,7 +240,8 @@ estimate(var)</code></pre>
   <tr><td>装甲板图模型</td><td><code>src/filter_test/include/filter_test/graph_optimizer/armor_model.hpp</code><br><code>src/filter_test/src/graph_optimizer/armor_model.cpp</code></td></tr>
   <tr><td>装甲板 tracker 门面</td><td><code>src/filter_test/include/filter_test/graph_optimizer/armor_tracker.hpp</code><br><code>src/filter_test/src/graph_optimizer/armor_tracker.cpp</code></td></tr>
   <tr><td>能量机关图模型</td><td><code>src/filter_test/include/filter_test/graph_optimizer/rune_model.hpp</code><br><code>src/filter_test/src/graph_optimizer/rune_model.cpp</code></td></tr>
-  <tr><td>ROS 节点</td><td><code>src/filter_test/src/graph_optimizer_test.cpp</code><br><code>src/filter_test/src/rune_graph_optimizer.cpp</code></td></tr>
+  <tr><td>ROS 节点</td><td><code>src/filter_test/src/graph_optimizer_test.cpp</code><br><code>src/filter_test/src/filter_graph_optimizer.cpp</code><br><code>src/filter_test/src/rune_graph_optimizer.cpp</code></td></tr>
+  <tr><td>ROS 辅助工具</td><td><code>src/filter_test/include/filter_test/ros_utils/</code><br><code>src/filter_test/src/ros_utils/</code></td></tr>
   <tr><td>回归测试</td><td><code>src/filter_test/test/test_auto_graph_optimizer.cpp</code></td></tr>
 </table>
 

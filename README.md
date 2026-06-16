@@ -17,14 +17,13 @@
 | 前哨站模型 | 可用 | `mode: outpost` 三装甲板仿真；传统滤波和 typed graph 均支持三槽位、120 度、独立 `dz_1/dz_2`。 |
 | 能量机关仿真 | 可用 | 小符每次 1 片随机扇叶；大符每次 2 片随机扇叶；3 秒切换；`RuneTargets` 只包含观测到的五点扇叶，不发布物理编号。 |
 | 装甲板图优化 | 主链路 | typed GTSAM，角点像素因子 + 几何因子 + auto_aim 风格边缘重投影因子。 |
+| 滤波前端 + 图优化后端 | 可选 | `filter_graph_optimizer` 近似同步 `/detector/armors` 和 `/track_result`，用滤波结果作为图优化初值/弱先验。 |
 | 能量机关图优化 | 可用 | 5 点 PnP prior、JLU 风格辅助 `Pose3`、auto_aim 风格直接重投影、大符 Ceres 曲线拟合。 |
 | 传统滤波 | 保留 | EKF/UKF + CV/Singer，用于对照和旧链路。 |
 
-本分支改动按要求先保留在工作区，**不自动提交 git**。
-
 ## 一眼看懂链路
 
-装甲板主链路：
+装甲板纯图优化链路：
 
 ```text
 armor_simulation_node
@@ -33,6 +32,18 @@ armor_simulation_node
   -> ArmorGraphTracker
   -> ArmorCvPixelGraph
   -> auto_graph::GraphOptimizer
+  -> GTSAM
+  -> /tracker/target, /graph_optimizer/marker
+```
+
+滤波前端 + 图优化后端链路：
+
+```text
+armor_simulation_node
+  -> /detector/armors
+  -> filter -> /track_result
+  -> filter_graph_optimizer
+  -> ArmorGraphTracker / ArmorCvPixelGraph
   -> GTSAM
   -> /tracker/target, /graph_optimizer/marker
 ```
@@ -79,12 +90,21 @@ src/armor_simulation/
   src/gimbal_simulation.cpp                      # 云台动力学和 TF
 
 src/filter_test/
+  include/filter_test/filter.hpp                  # ArmorFilter 对外接口
+  include/filter_test/filter_test.hpp             # 传统滤波 ROS 节点外壳
+  include/filter_test/filters/                    # EKF/UKF、CV/Singer、滤波工具
+  include/filter_test/ros_utils/                  # 相机信息、图优化节点、滤波前端适配工具
   include/filter_test/graph_optimizer/graph_core.hpp
   include/filter_test/graph_optimizer/armor_model.hpp
   include/filter_test/graph_optimizer/rune_model.hpp
+  src/filter_test.cpp                             # filter 节点入口
+  src/filter_graph_optimizer.cpp                  # 滤波器前端 + 图优化后端节点
+  src/filters/filter.cpp                          # ArmorFilter 业务实现
   src/graph_optimizer/graph_core.cpp
   src/graph_optimizer/armor_model.cpp
   src/graph_optimizer/rune_model.cpp
+  src/ros_utils/camera_info_utils.cpp
+  src/ros_utils/graph_optimizer_node_utils.cpp
   src/graph_optimizer_test.cpp
   src/rune_graph_optimizer.cpp
 ```
@@ -106,10 +126,20 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1 \
   --cmake-args -DBUILD_TESTING=ON
 ```
 
-默认 launch 当前只启动装甲板图优化节点：
+当前 launch 文件会读取 `config.yaml` 顶层 `tracker_backend` 作为默认后端：
+
+- `graph`：纯图优化后端。
+- `filter_graph`：传统滤波器前端 + 图优化后端。
+
+注意：当前 `filter_test.launch.py` 的返回列表实际启用仿真、云台和 `filter` 节点；
+`graph_optimizer_test`、`filter_graph_optimizer`、`angle_solver`、能量机关和 jlu 节点仍以注释形式保留。
+若要用 launch 一次拉起完整后端链路，需要先确认对应节点已加入 `LaunchDescription`；
+单独调试时也可以直接用 `ros2 run` 启动目标节点。
 
 ```bash
 ros2 launch filter_test filter_test.launch.py
+ros2 launch filter_test filter_test.launch.py tracker_backend:=graph
+ros2 launch filter_test filter_test.launch.py tracker_backend:=filter_graph
 ```
 
 单独运行常用节点：
@@ -125,6 +155,12 @@ ros2 run armor_simulation rune_simulation_node \
   --ros-args --params-file src/armor_simulation/config/simulation_config.yaml
 
 ros2 run filter_test graph_optimizer_test \
+  --ros-args --params-file src/filter_test/config/config.yaml
+
+ros2 run filter_test filter \
+  --ros-args --params-file src/filter_test/config/config.yaml
+
+ros2 run filter_test filter_graph_optimizer \
   --ros-args --params-file src/filter_test/config/config.yaml
 
 ros2 run filter_test rune_graph_optimizer \
@@ -157,13 +193,14 @@ colcon test --packages-select armor_simulation \
 | 文件 | 主要节点 |
 | --- | --- |
 | `src/armor_simulation/config/simulation_config.yaml` | `/armor_simulation_node`、`/rune_simulation_node` |
-| `src/filter_test/config/config.yaml` | `/graph_optimizer_test`、`/rune_graph_optimizer`、`/filter`、`/gimbal_simulation` |
+| `src/filter_test/config/config.yaml` | `/filter`、`/graph_optimizer_test`、`/filter_graph_optimizer`、`/rune_graph_optimizer`、`/gimbal_simulation` |
 
 常改参数：
 
 - `armor_simulation_node.mode`: `standard` 或 `outpost`。
 - `outpost.radius/dz_1/dz_2/armor_pitch`: 前哨站几何。
 - `camera_info_url`、`camera_name`: 单一相机内参来源；默认指向 `armor_simulation/config/camera_info.yaml`。
+- `tracker_backend`: launch 后端选择，`graph` 为纯图优化，`filter_graph` 为滤波前端 + 图优化后端。
 - `pixel_noise_*`、`pixel_noise_common_ratio`: 像素噪声。
 - `publish_gimbal_gt`: 全局唯一开关；仿真器直接向 `/send_pack` 发布真值 yaw/pitch，armor 瞄准机器人中心，rune 优先瞄准当前观测扇叶，其次 active blade 的击打中心。
 - `rune_simulation_node.rune_mode`: `small` 或 `big`。
@@ -173,6 +210,7 @@ colcon test --packages-select armor_simulation \
 - `graph_optimizer_test.use_edge_reproj_factor`、`edge_reproj_sigma`、`edge_loss_slope_k`: auto_aim EdgeLoss 风格四边重投影约束。
 - `graph_optimizer_test.standard.armor_pitch`、`outpost.armor_pitch`: direct edge 重投影使用的装甲板 pitch。
 - `graph_optimizer_test.outpost.radius/dz_1/dz_2`: typed graph 前哨站静态几何先验。
+- `graph_optimizer_test.frontend.*`: `filter_graph_optimizer` 使用的同步窗口和滤波器弱先验参数。
 - `rune_graph_optimizer.initial_center`、`normal_yaw`、`normal_pitch`、`predict_dt`: 能量机关图优化初值、平面姿态和预测。
 - `rune_graph_optimizer.use_direct_reproj_factor`、`direct_reproj_sigma`、`pnp_pose_prior_sigma`: 能量机关 PnP/直接重投影约束。
 - `rune_graph_optimizer.match_max_roll_diff`、`match_max_center_distance`: 无编号观测匹配到 5 个物理 slot 的门限。

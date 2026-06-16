@@ -28,7 +28,11 @@ RuneCvGraph
 ```
 
 当前 `RuneCvGraph`、消息/因子模型和 ROS `rune_graph_optimizer` 节点都已接入；
-默认 launch 仍只启动装甲板图优化，能量机关节点按需取消注释。
+`filter_graph_optimizer` 可用传统滤波器输出作为装甲板图优化前端初值/弱先验。
+launch 中的后端默认值来自 `config.yaml` 顶层 `tracker_backend`，但部分节点仍可能在
+`LaunchDescription` 中保持注释。当前返回列表实际只启用仿真、云台和 `filter`；
+使用图优化后端前需确认 `graph_optimizer_test` 或 `filter_graph_optimizer` 已加入返回列表，
+或直接用 `ros2 run` 单独启动。
 
 ## 代码入口
 
@@ -46,6 +50,7 @@ src/filter_test/
 │   ├── armor_tracker.cpp    empty-frame handling, reset, result wrapping
 │   └── rune_model.cpp       rune motion, reprojection and geometry factors
 ├── src/graph_optimizer_test.cpp
+├── src/filter_graph_optimizer.cpp
 ├── src/rune_graph_optimizer.cpp
 └── test/test_auto_graph_optimizer.cpp
 ```
@@ -70,16 +75,21 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --parallel-workers 1 \
   --cmake-args -DBUILD_TESTING=ON
 ```
 
-默认 launch 当前只启动 `graph_optimizer_test`：
+launch 可通过 `tracker_backend` 选择纯图优化或滤波前端后端；若对应节点在
+`filter_test.launch.py` 的返回列表中保持注释，需要先取消注释或单独运行节点：
 
 ```bash
 ros2 launch filter_test filter_test.launch.py
+ros2 launch filter_test filter_test.launch.py tracker_backend:=graph
+ros2 launch filter_test filter_test.launch.py tracker_backend:=filter_graph
 ```
 
 单独运行：
 
 ```bash
 ros2 run filter_test graph_optimizer_test \
+  --ros-args --params-file src/filter_test/config/config.yaml
+ros2 run filter_test filter_graph_optimizer \
   --ros-args --params-file src/filter_test/config/config.yaml
 ```
 

@@ -9,7 +9,7 @@
     # - 距离缩放参数只在超过 observation_noise_reference_distance 后放宽观测约束。
     # 默认 tracker 后端。命令行 tracker_backend:=... 仍然优先于这里的值。
     # graph=纯图优化；filter_graph=启动传统滤波器前端 + 图优化后端。
-    tracker_backend: "graph"
+    tracker_backend: "filter_graph"
     camera_name: "narrow_stereo"
     camera_info_url: "package://armor_simulation/config/camera_info.yaml"
 
@@ -77,8 +77,8 @@
       r_yaw_det: 0.03
 
     # 滤波器和模型选择。
-    use_ekf: false         # true=EKF, false=UKF
-    use_cv_model: false      # true=CV 11D, false=Singer 15D
+    use_ekf: true         # true=EKF, false=UKF
+    use_cv_model: true      # true=CV 11D, false=Singer 15D
 
 /graph_optimizer_test:
   ros__parameters:

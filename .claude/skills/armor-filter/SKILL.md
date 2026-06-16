@@ -15,13 +15,13 @@ src/filter_test/
 │   │   ├── extended_kalman.hpp        EKF — Ceres Jet autodiff, 动态维度
 │   │   ├── unscented_kalman.hpp       UKF — sigma 点传播, 动态维度
 │   │   ├── cv_model.hpp              CV Predict / MeasureSingle / MeasureDouble / predict_q / measure_r
-│   │   └── singer_model.hpp          Singer 15D Predict / Measure / predict_q / measure_r
+│   │   ├── singer_model.hpp          Singer 15D Predict / Measure / predict_q / measure_r
+│   │   └── filter_common.hpp         枚举 / 角度工具函数 / ceres_xyz_to_ypd
 │   ├── filter.hpp                    ArmorFilter 类 (init/update)
-│   ├── filter_test.hpp               ArmorTest : rclcpp::Node
-│   └── common.hpp                    枚举 / 角度工具函数 / ceres_xyz_to_ypd
+│   └── filter_test.hpp               ArmorTest : rclcpp::Node
 ├── src/
-│   ├── filter.cpp                    ArmorFilter 实现
-│   └── filter_test.cpp              main + ArmorTest
+│   ├── filters/filter.cpp            ArmorFilter 实现
+│   └── filter_test.cpp               main + ArmorTest
 └── config/config.yaml                /filter + /graph_optimizer_test 参数
 ```
 
@@ -34,6 +34,9 @@ source install/setup.bash
 ros2 run filter_test filter \
   --ros-args --params-file src/filter_test/config/config.yaml
 ```
+
+`filter_graph_optimizer` 会订阅 `/track_result`，因此使用滤波器前端 + 图优化后端模式时，
+需要同时运行 `/filter` 节点和 `filter_graph_optimizer` 节点。
 
 ## 核心接口
 
@@ -191,7 +194,7 @@ z = [atan2(armor_y, armor_x),  atan2(armor_z, √(x²+y²)),  |armor|,  yaw+I*π
 // α = 1/tau (机动频率)
 ```
 
-## 角度工具 (common.hpp)
+## 角度工具 (filters/filter_common.hpp)
 
 ```cpp
 normalize_angle(a)        → [-π, π]
@@ -246,5 +249,5 @@ enum MatchState { MATCH_NONE, MATCH_SINGLE, MATCH_DOUBLE };
 3. 定义 `input_size` / `output_size` / `size` 成员供 EKF/UKF 使用
 4. 实现 `predict_q()` / `measure_r()` 函数
 5. 在 `ArmorFilter` 中添加对应的 predict/update 调用分支
-6. 在 `common.hpp` 添加相关工具函数 (如需要)
+6. 在 `filters/filter_common.hpp` 添加相关工具函数 (如需要)
 7. `config.yaml` 添加模型专属参数

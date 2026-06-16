@@ -1,5 +1,5 @@
 #include "filter_test/graph_optimizer_test.hpp"
-#include "filter_test/graph_optimizer_node_utils.hpp"
+#include "filter_test/ros_utils/graph_optimizer_node_utils.hpp"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>

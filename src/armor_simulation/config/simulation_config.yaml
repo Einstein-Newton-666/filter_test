@@ -52,7 +52,7 @@
 /armor_simulation_node:
   ros__parameters:
     # 基础参数
-    mode: "standard"                # standard | outpost
+    mode: "outpost"                # standard | outpost
 
     # ── 普通四装甲板模型参数 ──
     # 仅 mode="standard" 时使用；保持原普通模型参数，不被前哨站复用。

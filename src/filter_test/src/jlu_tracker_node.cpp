@@ -1,7 +1,7 @@
 // jlu tracker adapter — converts ROS2 Armor messages to jlu::RobotTarget
 #include "filter_test/jlu_tracker/target.hpp"
 #include "filter_test/jlu_tracker/configs.hpp"
-#include "filter_test/camera_info_utils.hpp"
+#include "filter_test/ros_utils/camera_info_utils.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
 
 #include <rclcpp/rclcpp.hpp>

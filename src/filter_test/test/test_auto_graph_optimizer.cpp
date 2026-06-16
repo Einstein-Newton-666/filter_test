@@ -14,7 +14,7 @@
 #include <gtsam/geometry/Rot2.h>
 
 #include "filter_test/graph_optimizer/armor_tracker.hpp"
-#include "filter_test/filter_frontend_adapter.hpp"
+#include "filter_test/ros_utils/filter_frontend_adapter.hpp"
 #include "filter_test/graph_optimizer/rune_model.hpp"
 #include "filter_test/graph_optimizer_test.hpp"
 #include "filter_test/visualization_marker_utils.hpp"

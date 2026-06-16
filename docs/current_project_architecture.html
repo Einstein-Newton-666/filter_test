@@ -206,7 +206,7 @@
 <div class="grid">
   <div class="card">
     <strong>装甲板</strong>
-    <small><code>armor_simulation_node</code> 生成带噪 PnP 观测，<code>graph_optimizer_test</code> 做 typed GTSAM 优化。</small>
+    <small><code>armor_simulation_node</code> 生成带噪 PnP 观测，<code>graph_optimizer_test</code> 做纯 typed GTSAM 优化；<code>filter_graph_optimizer</code> 可用滤波器结果作为前端初值。</small>
   </div>
   <div class="card">
     <strong>能量机关</strong>
@@ -226,8 +226,18 @@
 <div class="flow">
   <div class="step blue"><b>仿真真值</b><span>目标运动、standard/outpost 几何</span></div>
   <div class="step blue"><b>视觉观测</b><span>投影、像素噪声、IPPE PnP</span></div>
-  <div class="step green"><b>图优化</b><span>像素因子 + edge 因子 + 几何/运动因子</span></div>
+  <div class="step green"><b>滤波/图优化</b><span>纯图优化，或 filter 前端 + graph 后端</span></div>
   <div class="step purple"><b>输出</b><span><code>/tracker/target</code> 和 marker</span></div>
+</div>
+
+<div class="note">
+  <strong>启动提醒：</strong>
+  <code>filter_test.launch.py</code> 会读取 <code>config.yaml</code> 顶层
+  <code>tracker_backend</code>，支持 <code>graph</code> 和 <code>filter_graph</code>。
+  当前 launch 返回列表实际启用仿真、云台和 <code>filter</code>；
+  图优化后端、<code>angle_solver</code>、能量机关和 jlu 节点仍可能以注释形式保留。
+  使用前需要确认对应节点已加入 <code>LaunchDescription</code>，或者直接用
+  <code>ros2 run</code> 单独启动。
 </div>
 
 <h3>能量机关链路</h3>
@@ -557,6 +567,9 @@ predicted_roll = curve_ready ? angle(t + predict_dt)
   <tr><td>装甲板图模型</td><td><code>graph_optimizer/armor_model.hpp/.cpp</code></td></tr>
   <tr><td>能量机关图模型</td><td><code>graph_optimizer/rune_model.hpp/.cpp</code></td></tr>
   <tr><td>通用 typed graph core</td><td><code>graph_optimizer/graph_core.hpp/.cpp</code></td></tr>
+  <tr><td>传统滤波器</td><td><code>include/filter_test/filter.hpp</code>、<code>src/filters/filter.cpp</code></td></tr>
+  <tr><td>滤波器前端图优化后端</td><td><code>src/filter_graph_optimizer.cpp</code></td></tr>
+  <tr><td>ROS 辅助工具</td><td><code>include/filter_test/ros_utils/</code>、<code>src/ros_utils/</code></td></tr>
 </table>
 
 <h2>8. 构建和验证</h2>

@@ -1,6 +1,6 @@
-#include "filter_test/filter_frontend_adapter.hpp"
+#include "filter_test/ros_utils/filter_frontend_adapter.hpp"
 #include "filter_test/graph_optimizer/armor_tracker.hpp"
-#include "filter_test/graph_optimizer_node_utils.hpp"
+#include "filter_test/ros_utils/graph_optimizer_node_utils.hpp"
 #include "filter_test/graph_optimizer_test.hpp"
 #include "filter_test/visualization_marker_utils.hpp"
 

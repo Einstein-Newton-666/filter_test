@@ -32,7 +32,8 @@ colcon test-result --verbose
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 source install/setup.bash
 
-# 完整启动 (sim + gimbal + filter + graph_optimizer + angle_solver)
+# 当前 launch 返回列表默认启用 sim + gimbal + filter；
+# graph_optimizer/filter_graph_optimizer/angle_solver 等按需取消注释或单独运行
 ros2 launch filter_test filter_test.launch.py
 
 # 单独运行节点
@@ -40,6 +41,7 @@ ros2 run armor_simulation armor_simulation_node
 ros2 run armor_simulation gimbal_simulation
 ros2 run filter_test filter
 ros2 run filter_test graph_optimizer_test --ros-args --params-file src/filter_test/config/config.yaml
+ros2 run filter_test filter_graph_optimizer --ros-args --params-file src/filter_test/config/config.yaml
 ```
 
 ROS 发行版：**Humble** (`.vscode/c_cpp_properties.json` 硬编码 `/opt/ros/humble` 路径)。
@@ -56,6 +58,17 @@ C++17，GCC 11 (Ubuntu 22.04)。
 这些索引在多个头文件和测试中被引用 (`cv_model.hpp`、`singer_model.hpp`、
 `graph_optimizer/armor_model.hpp` 等) — 修改需格外小心。
 
+## 传统滤波器结构
+
+核心文件：
+
+- `filters/extended_kalman.hpp`、`filters/unscented_kalman.hpp` — 底层 EKF/UKF。
+- `filters/cv_model.hpp`、`filters/singer_model.hpp` — CV/Singer 状态转移、观测和 Q/R。
+- `filters/filter_common.hpp` — 角度、状态枚举和 ypd 工具。
+- `filter.hpp` + `src/filters/filter.cpp` — `ArmorFilter` 初始化、匹配、预测更新和输出映射。
+- `filter_test.hpp` + `src/filter_test.cpp` — `/filter` ROS 节点入口、参数、订阅发布和 marker。
+- `src/filter_graph_optimizer.cpp` — 同步 `/detector/armors` 与 `/track_result`，将滤波器结果作为图优化初值/弱先验。
+
 ## 图优化框架 — typed GTSAM
 
 当前主链路：
@@ -71,6 +84,7 @@ GraphOptimizerTest -> ArmorGraphTracker -> ArmorCvPixelGraph -> auto_graph::Grap
 - `graph_optimizer/armor_tracker.hpp/.cpp` — 空观测、reset、求解结果兼容语义
 - `graph_optimizer/rune_model.hpp/.cpp` — `RuneCvGraph`、能量机关 typed 变量、roll 运动因子、叶片重投影/几何因子
 - `graph_optimizer_test.cpp` — ROS 参数、TF、订阅和发布
+- `filter_graph_optimizer.cpp` — 滤波器前端 + 图优化后端 ROS 节点
 
 typed 变量：
 `center` (Point3, 动态)、`velocity` (Vector3, 动态)、`yaw` (Rot2, 动态)、
@@ -137,8 +151,9 @@ armor 瞄准机器人中心，rune 优先瞄准当前观测扇叶，其次 activ
 
 ## 配置文件 (修改这些，而不是头文件默认值)
 
-- `src/filter_test/config/config.yaml` — `/filter` (CV/Singer、EKF/UKF、R 参数) 和
-  `/graph_optimizer_test` (像素 σ、几何噪声、auto_aim edge 重投影、`vel_sigma/vyaw_sigma`、smoother、`camera_info_url`)
+- `src/filter_test/config/config.yaml` — 顶层 `tracker_backend`、`/filter` (CV/Singer、EKF/UKF、R 参数)、
+  `/graph_optimizer_test` / `/filter_graph_optimizer` (像素 σ、几何噪声、前端弱先验、
+  auto_aim edge 重投影、`vel_sigma/vyaw_sigma`、smoother、`camera_info_url`) 和 `/rune_graph_optimizer`
 - `src/armor_simulation/config/simulation_config.yaml` — 初始状态、运动限制、几何参数、
   `mode: standard|outpost`、前哨站 `outpost.*`、像素噪声 U 形模型、
   `pixel_noise_common_ratio`、离群点、`camera_info_url`

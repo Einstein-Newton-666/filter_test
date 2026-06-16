@@ -2,7 +2,7 @@
 
 #include <Eigen/Dense>
 #include <ceres/jet.h>
-#include "../common.hpp"
+#include "filter_test/filters/filter_common.hpp"
 
 //修改自交哥的滤波器，主要改动为将滤波器的大小修改为动态大小，但速度可能会下降QWQ
 class ExtendedKalmanFilter
@@ -49,7 +49,7 @@ public:
         }
         return PredictResult{x_pri, F};
     }
-    
+
     // 预测并修改协方差和状态空间
     template<class PredictFunc>
     void predict_forward(PredictFunc&& f, const Eigen::MatrixXd& Q){

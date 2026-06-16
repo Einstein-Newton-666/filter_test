@@ -32,7 +32,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     auto_aim_interfaces
 )
 
-ament_auto_add_executable(filter src/filter_test.cpp src/filter.cpp)
+ament_auto_add_executable(filter
+  src/filter_test.cpp
+  src/filters/filter.cpp
+)
 target_include_directories(filter PUBLIC
 ${EIGEN3_INCLUDE_DIR}
 ${OpenCV_INCLUDE_DIRS}
@@ -44,8 +47,8 @@ ${PROJECT_NAME}__rosidl_typesupport_cpp
 )
 
 set(GRAPH_OPTIMIZER_SOURCES
-  src/camera_info_utils.cpp
-  src/graph_optimizer_node_utils.cpp
+  src/ros_utils/camera_info_utils.cpp
+  src/ros_utils/graph_optimizer_node_utils.cpp
   src/graph_optimizer/graph_core.cpp
   src/graph_optimizer/armor_model.cpp
   src/graph_optimizer/armor_tracker.cpp
@@ -142,7 +145,7 @@ if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   ament_auto_add_gtest(${PROJECT_NAME}_test
     test/filter_test.cpp
-    src/filter.cpp
+    src/filters/filter.cpp
   )
   target_include_directories(${PROJECT_NAME}_test PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
